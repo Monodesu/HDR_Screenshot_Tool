@@ -204,9 +204,13 @@ private:
                 g = ACESFilm(g);
                 b = ACESFilm(b);
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
+                r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
+                g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
+                b = GammaCorrect(std::clamp(b, 0.0f, 1.0f));
+
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255);
             }
         }
     }
@@ -230,9 +234,13 @@ private:
                 g = ACESFilm(g);
                 b = ACESFilm(b);
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
+                r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
+                g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
+                b = GammaCorrect(std::clamp(b, 0.0f, 1.0f));
+
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255);
             }
         }
     }
@@ -253,6 +261,10 @@ private:
     static constexpr float ACESFilm(float x) noexcept {
         constexpr float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
         return std::max(0.0f, (x * (a * x + b)) / (x * (c * x + d) + e));
+    }
+
+    static constexpr float GammaCorrect(float x) noexcept {
+        return std::pow(x, 1.0f / 2.2f);
     }
 
     static float PQToLinear(float pq) noexcept {
@@ -480,6 +492,10 @@ public:
             overlay->startPoint.x = GET_X_LPARAM(lParam);
             overlay->startPoint.y = GET_Y_LPARAM(lParam);
             overlay->endPoint = overlay->startPoint;
+            break;
+
+        case WM_RBUTTONDOWN:
+            overlay->Hide();
             break;
 
         case WM_MOUSEMOVE:
