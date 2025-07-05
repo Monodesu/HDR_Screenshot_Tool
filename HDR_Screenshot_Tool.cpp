@@ -53,9 +53,6 @@ struct Config {
     std::string savePath = "Screenshots";
     bool autoStart = false;
     bool saveToFile = true;
-    float hdrExposure = 0.5f;  // 降低默认曝光
-    float hdrWhitePoint = 1.0f;
-    int hdrMode = 1; // 0=直接钳制, 1=压缩+钳制, 2=对数压缩, 3=极端暗化
     bool debugMode = false; // 调试模式
 };
 
@@ -112,7 +109,11 @@ public:
         // 检测HDR状态
         DetectHDRStatus();
 
-        hr = output6->DuplicateOutput(d3dDevice.Get(), &deskDupl);
+        DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        hr = output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &deskDupl);
+        if (FAILED(hr)) {
+            hr = output6->DuplicateOutput(d3dDevice.Get(), &deskDupl);
+        }
         return SUCCEEDED(hr);
     }
 
@@ -336,8 +337,6 @@ private:
         if (debugOnce) {
             std::ofstream debug("process_debug.txt", std::ios::app);
             debug << "ProcessHDR16Float called." << std::endl;
-            debug << "HDR Process mode: " << GetHDRMode() << std::endl;
-            debug << "HDR exposure value: " << GetHDRExposure() << std::endl;
             debugOnce = false;
         }
 
@@ -367,50 +366,14 @@ private:
                 float g = HalfToFloat(srcRow[x * 4 + 1]);
                 float b = HalfToFloat(srcRow[x * 4 + 2]);
 
-                // 如果不是调试模式，强制暗化
-                if (!GetDebugMode()) {
-                    r *= 0.1f; // 强制暗化到10%
-                    g *= 0.1f;
-                    b *= 0.1f;
-                }
 
-                // 然后根据配置的HDR模式处理
-                switch (GetHDRMode()) {
-                case 0: // 直接钳制模式
-                    r = std::clamp(r, 0.0f, 1.0f);
-                    g = std::clamp(g, 0.0f, 1.0f);
-                    b = std::clamp(b, 0.0f, 1.0f);
-                    break;
+                r = NonLinearToneMap(r);
+                g = NonLinearToneMap(g);
+                b = NonLinearToneMap(b);
 
-                case 1: // 压缩+钳制模式
-                    r = std::clamp(r * GetHDRExposure(), 0.0f, 1.0f);
-                    g = std::clamp(g * GetHDRExposure(), 0.0f, 1.0f);
-                    b = std::clamp(b * GetHDRExposure(), 0.0f, 1.0f);
-                    break;
-
-                case 2: // 对数压缩模式
-                    r = LogCompression(r, GetHDRExposure());
-                    g = LogCompression(g, GetHDRExposure());
-                    b = LogCompression(b, GetHDRExposure());
-                    break;
-
-                case 3: // 新增：极端暗化模式
-                    r = std::pow(std::clamp(r, 0.0f, 1.0f), 2.2f) * GetHDRExposure();
-                    g = std::pow(std::clamp(g, 0.0f, 1.0f), 2.2f) * GetHDRExposure();
-                    b = std::pow(std::clamp(b, 0.0f, 1.0f), 2.2f) * GetHDRExposure();
-                    break;
-
-                default: // 默认使用极端暗化
-                    r = std::clamp(r * 0.2f, 0.0f, 1.0f);
-                    g = std::clamp(g * 0.2f, 0.0f, 1.0f);
-                    b = std::clamp(b * 0.2f, 0.0f, 1.0f);
-                    break;
-                }
-
-                // 跳过伽马校正看看是否有影响
-                // r = LinearToSRGB(r);
-                // g = LinearToSRGB(g);
-                // b = LinearToSRGB(b);
+                r = LinearToSRGB(r);
+                g = LinearToSRGB(g);
+                b = LinearToSRGB(b);
 
                 dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
                 dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
@@ -419,23 +382,8 @@ private:
         }
     }
 
-    // 添加获取配置的方法
-    int GetHDRMode() const {
-        return config ? config->hdrMode : 1;
-    }
-    float GetHDRExposure() const {
-        return config ? config->hdrExposure : 0.5f;
-    }
     bool GetDebugMode() const {
         return config ? config->debugMode : false;
-    }
-
-    static float LogCompression(float x, float exposure) noexcept {
-        if (x <= 0.0f) return 0.0f;
-        x *= exposure;
-        // 对数压缩：log(1+x)/log(1+maxVal)
-        constexpr float maxVal = 10.0f;
-        return std::log(1.0f + x) / std::log(1.0f + maxVal);
     }
 
     void ProcessHDR10(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
@@ -457,7 +405,8 @@ private:
                 float b = PQToLinear(static_cast<float>(b10) / 1023.0f);
 
                 // 归一化到合理范围（PQ解码后是0-10000 nits）
-                constexpr float maxNits = 1000.0f; // 大多数内容的峰值亮度
+                auto meta = GetDisplayHDRMetadata();
+                float maxNits = meta.maxContentLightLevel > 0.0f ? meta.maxContentLightLevel : 1000.0f;
                 r = std::clamp(r / maxNits, 0.0f, 1.0f);
                 g = std::clamp(g / maxNits, 0.0f, 1.0f);
                 b = std::clamp(b / maxNits, 0.0f, 1.0f);
@@ -465,10 +414,10 @@ private:
                 // Rec.2020 到 sRGB 色域转换
                 Rec2020ToSRGB(r, g, b);
 
-                // 简单色调映射
-                r = SimpleToneMapping(r);
-                g = SimpleToneMapping(g);
-                b = SimpleToneMapping(b);
+                // 非线性色调映射
+                r = NonLinearToneMap(r);
+                g = NonLinearToneMap(g);
+                b = NonLinearToneMap(b);
 
                 // sRGB伽马校正
                 r = LinearToSRGB(std::clamp(r, 0.0f, 1.0f));
@@ -561,18 +510,9 @@ private:
         }
     }
 
-    static constexpr float SimpleToneMapping(float x) noexcept {
-        // 非常简单的色调映射，几乎不压缩
-        return x / (1.0f + x * 0.1f);
-    }
-
-    static constexpr float ImprovedToneMapping(float x) noexcept {
-        // Reinhard扩展色调映射，比ACES更温和
-        constexpr float whitePoint = 1.0f;
-        constexpr float exposure = 1.0f;
-
-        x *= exposure;
-        return (x * (1.0f + x / (whitePoint * whitePoint))) / (1.0f + x);
+    static constexpr float NonLinearToneMap(float x) noexcept {
+        // 简单的 x/(1+x) 色调映射
+        return x / (1.0f + x);
     }
 
     static float LinearToSRGB(float linear) noexcept {
@@ -1070,9 +1010,6 @@ private:
                 else if (key == "SavePath") config.savePath = value;
                 else if (key == "AutoStart") config.autoStart = (value == "true");
                 else if (key == "SaveToFile") config.saveToFile = (value == "true");
-                else if (key == "HDRExposure") config.hdrExposure = std::stof(value);
-                else if (key == "HDRWhitePoint") config.hdrWhitePoint = std::stof(value);
-                else if (key == "HDRMode") config.hdrMode = std::stoi(value);
                 else if (key == "DebugMode") config.debugMode = (value == "true");
             }
         }
@@ -1087,13 +1024,7 @@ private:
             << std::format("SavePath={}\n", config.savePath)
             << std::format("AutoStart={}\n", config.autoStart ? "true" : "false")
             << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false")
-            << "\n; HDR Processing Settings\n"
-            << "; HDRExposure: 0.1-2.0, lower=darker (try 0.3 if still too bright)\n"
-            << std::format("HDRExposure={}\n", config.hdrExposure)
-            << std::format("HDRWhitePoint={}\n", config.hdrWhitePoint)
-            << "; HDRMode: 0=clip, 1=compress+clip, 2=log compression, 3=extreme darken\n"
-            << std::format("HDRMode={}\n", config.hdrMode)
-            << "; DebugMode: outputs raw HDR values to debug file\n"
+            << "\n; Debug settings\n"
             << std::format("DebugMode={}\n", config.debugMode ? "true" : "false");
     }
 
