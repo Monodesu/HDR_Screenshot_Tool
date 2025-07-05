@@ -48,8 +48,8 @@ using namespace std::chrono;
 
 // 配置结构
 struct Config {
-    std::string regionHotkey = "ctrl+a";
-    std::string fullscreenHotkey = "ctrl+shift+a";
+    std::string regionHotkey = "ctrl+alt+a";
+    std::string fullscreenHotkey = "ctrl+shift+alt+a";
     std::string savePath = "Screenshots";
     bool autoStart = false;
     bool saveToFile = true;
@@ -200,13 +200,19 @@ private:
                 float g = HalfToFloat(srcRow[x * 4 + 1]);
                 float b = HalfToFloat(srcRow[x * 4 + 2]);
 
+                Rec2020ToSRGB(r, g, b);
+
                 r = ACESFilm(r);
                 g = ACESFilm(g);
                 b = ACESFilm(b);
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
+                r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
+                g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
+                b = GammaCorrect(std::clamp(b, 0.0f, 1.0f));
+
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255);
             }
         }
     }
@@ -226,13 +232,19 @@ private:
                 float g = PQToLinear(static_cast<float>(g10) / 1023.0f) / 1000.0f;
                 float b = PQToLinear(static_cast<float>(b10) / 1023.0f) / 1000.0f;
 
+                Rec2020ToSRGB(r, g, b);
+
                 r = ACESFilm(r);
                 g = ACESFilm(g);
                 b = ACESFilm(b);
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
+                r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
+                g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
+                b = GammaCorrect(std::clamp(b, 0.0f, 1.0f));
+
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255);
             }
         }
     }
@@ -253,6 +265,19 @@ private:
     static constexpr float ACESFilm(float x) noexcept {
         constexpr float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
         return std::max(0.0f, (x * (a * x + b)) / (x * (c * x + d) + e));
+    }
+
+    static float GammaCorrect(float x) noexcept {
+        return std::pow(x, 1.0f / 2.2f);
+    }
+
+    static void Rec2020ToSRGB(float& r, float& g, float& b) noexcept {
+        float r2 = 1.66032f * r - 0.58757f * g - 0.07291f * b;
+        float g2 = -0.12441f * r + 1.13280f * g - 0.00835f * b;
+        float b2 = -0.01811f * r - 0.10060f * g + 1.11877f * b;
+        r = r2;
+        g = g2;
+        b = b2;
     }
 
     static float PQToLinear(float pq) noexcept {
@@ -480,6 +505,10 @@ public:
             overlay->startPoint.x = GET_X_LPARAM(lParam);
             overlay->startPoint.y = GET_Y_LPARAM(lParam);
             overlay->endPoint = overlay->startPoint;
+            break;
+
+        case WM_RBUTTONDOWN:
+            overlay->Hide();
             break;
 
         case WM_MOUSEMOVE:
