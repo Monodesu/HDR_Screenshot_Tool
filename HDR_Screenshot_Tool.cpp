@@ -292,6 +292,12 @@ private:
                 auto old = SelectObject(memDC, hBitmap);
                 BitBlt(memDC, 0, 0, width, height, screenDC, x, y, SRCCOPY);
 
+                // GDI 捕获只会得到已经色调映射到 SDR 的图像
+                if (GetDebugMode() && isHDREnabled) {
+                        std::ofstream debug("debug.txt", std::ios::app);
+                        debug << "Fallback to GDI - HDR data unavailable" << std::endl;
+                }
+
                 std::vector<uint8_t> buffer(width * height * 4);
                 memcpy(buffer.data(), bits, buffer.size());
 
