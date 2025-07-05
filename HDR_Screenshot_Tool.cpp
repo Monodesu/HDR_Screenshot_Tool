@@ -53,6 +53,7 @@ struct Config {
     std::string savePath = "Screenshots";
     bool autoStart = false;
     bool saveToFile = true;
+    bool showNotification = true;       // 是否弹窗提示
     bool debugMode = false; // 调试模式
     bool useACESFilmToneMapping = false; // 使用ACES色调映射
     float sdrBrightness = 250.0f;       // SDR目标亮度
@@ -1058,6 +1059,7 @@ private:
                 else if (key == "SavePath") config.savePath = value;
                 else if (key == "AutoStart") config.autoStart = (value == "true");
                 else if (key == "SaveToFile") config.saveToFile = (value == "true");
+                else if (key == "ShowNotification") config.showNotification = (value == "true");
                 else if (key == "DebugMode") config.debugMode = (value == "true");
                 else if (key == "UseACESFilmToneMapping") config.useACESFilmToneMapping = (value == "true");
                 else if (key == "SDRBrightness") config.sdrBrightness = std::stof(value);
@@ -1074,6 +1076,7 @@ private:
             << std::format("SavePath={}\n", config.savePath)
             << std::format("AutoStart={}\n", config.autoStart ? "true" : "false")
             << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false")
+            << std::format("ShowNotification={}\n", config.showNotification ? "true" : "false")
             << "\n; Debug settings\n"
             << std::format("DebugMode={}\n", config.debugMode ? "true" : "false")
             << "\n; HDR settings\n"
@@ -1247,6 +1250,10 @@ private:
 
     void ShowNotification(const std::wstring& message,
         const std::optional<std::wstring>& path = std::nullopt) {
+
+        if (!config.showNotification) {
+            return;
+        }
 
         // 确保托盘图标可以显示通知
         nid.uFlags = NIF_INFO;
