@@ -53,9 +53,6 @@ struct Config {
     std::string savePath = "Screenshots";
     bool autoStart = false;
     bool saveToFile = true;
-    float hdrExposure = 0.5f;  // 降低默认曝光
-    float hdrWhitePoint = 1.0f;
-    int hdrMode = 1; // 0=直接钳制, 1=压缩+钳制, 2=对数压缩, 3=极端暗化
     bool debugMode = false; // 调试模式
 };
 
@@ -112,7 +109,11 @@ public:
         // 检测HDR状态
         DetectHDRStatus();
 
-        hr = output6->DuplicateOutput(d3dDevice.Get(), &deskDupl);
+        DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        hr = output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &deskDupl);
+        if (FAILED(hr)) {
+            hr = output6->DuplicateOutput(d3dDevice.Get(), &deskDupl);
+        }
         return SUCCEEDED(hr);
     }
 
@@ -188,7 +189,7 @@ private:
             if (SUCCEEDED(output6.As(&output6Temp))) {
                 if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
                     // 输出调试信息
-                    std::ofstream debug("hdr_detection.txt");
+                    std::ofstream debug("debug.txt", std::ios::app);
                     debug << "Monitor Info:" << std::endl;
                     debug << "ColorSpace: " << static_cast<int>(outputDesc1.ColorSpace) << std::endl;
                     debug << "MaxLuminance: " << outputDesc1.MaxLuminance << std::endl;
@@ -224,7 +225,7 @@ private:
         // 如果无法获取信息，默认启用HDR处理
         if (!isHDREnabled) {
             isHDREnabled = true;
-            std::ofstream debug("hdr_detection.txt", std::ios::app);
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "Unable to obtain display information, HDR processing is enabled by default" << std::endl;
             debug.close();
         }
@@ -256,7 +257,7 @@ private:
         // 添加调试信息
         static bool debugOnce = true;
         if (debugOnce) {
-            std::ofstream debug("format_debug.txt");
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "DXGI Format: " << static_cast<int>(format) << std::endl;
             debug << "HDR Detected: " << (isHDREnabled ? "Yes" : "No") << std::endl;
             debug << "Handling branches: ";
@@ -331,111 +332,46 @@ private:
     }
 
     void ProcessHDR16Float(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
-        // 添加调试输出
-        static bool debugOnce = true;
-        if (debugOnce) {
-            std::ofstream debug("process_debug.txt", std::ios::app);
-            debug << "ProcessHDR16Float called." << std::endl;
-            debug << "HDR Process mode: " << GetHDRMode() << std::endl;
-            debug << "HDR exposure value: " << GetHDRExposure() << std::endl;
-            debugOnce = false;
-        }
+        // 获取当前显示器 HDR 最大亮度
+        auto meta = GetDisplayHDRMetadata();
+        float maxNits = meta.maxLuminance > 0.0f ? meta.maxLuminance : 1000.0f;
 
-        // 调试模式：输出原始数据
-        if (GetDebugMode()) {
-            static bool debugRawOnce = true;
-            if (debugRawOnce) {
-                std::ofstream debug("hdr_raw_data.txt");
-                debug << "HDR raw data analysis (first 100 pixels):\n";
-                auto* srcRow = reinterpret_cast<uint16_t*>(src);
-                for (int i = 0; i < 100 && i < width; ++i) {
-                    float r = HalfToFloat(srcRow[i * 4 + 0]);
-                    float g = HalfToFloat(srcRow[i * 4 + 1]);
-                    float b = HalfToFloat(srcRow[i * 4 + 2]);
-                    debug << std::format("Pixel{}: R={:.6f} G={:.6f} B={:.6f}\n", i, r, g, b);
-                }
-                debugRawOnce = false;
-            }
-        }
+        // 目标 SDR 显示亮度，使用 250 nits 作为日常最常用亮度
+        float targetNits = 250.0f;
+
+        // 计算曝光系数
+        float exposure = targetNits / maxNits;
 
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = reinterpret_cast<uint16_t*>(src + y * pitch);
             auto* dstRow = dst + y * width * 3;
 
             for (int x : std::views::iota(0, width)) {
-                float r = HalfToFloat(srcRow[x * 4 + 0]);
-                float g = HalfToFloat(srcRow[x * 4 + 1]);
-                float b = HalfToFloat(srcRow[x * 4 + 2]);
+                float r = HalfToFloat(srcRow[x * 4 + 0]) * exposure;
+                float g = HalfToFloat(srcRow[x * 4 + 1]) * exposure;
+                float b = HalfToFloat(srcRow[x * 4 + 2]) * exposure;
 
-                // 如果不是调试模式，强制暗化
-                if (!GetDebugMode()) {
-                    r *= 0.1f; // 强制暗化到10%
-                    g *= 0.1f;
-                    b *= 0.1f;
-                }
+                // ACES 色调映射
+                r = ACESFilmToneMapping(r);
+                g = ACESFilmToneMapping(g);
+                b = ACESFilmToneMapping(b);
 
-                // 然后根据配置的HDR模式处理
-                switch (GetHDRMode()) {
-                case 0: // 直接钳制模式
-                    r = std::clamp(r, 0.0f, 1.0f);
-                    g = std::clamp(g, 0.0f, 1.0f);
-                    b = std::clamp(b, 0.0f, 1.0f);
-                    break;
+                // sRGB 伽马校正
+                r = LinearToSRGB(r);
+                g = LinearToSRGB(g);
+                b = LinearToSRGB(b);
 
-                case 1: // 压缩+钳制模式
-                    r = std::clamp(r * GetHDRExposure(), 0.0f, 1.0f);
-                    g = std::clamp(g * GetHDRExposure(), 0.0f, 1.0f);
-                    b = std::clamp(b * GetHDRExposure(), 0.0f, 1.0f);
-                    break;
-
-                case 2: // 对数压缩模式
-                    r = LogCompression(r, GetHDRExposure());
-                    g = LogCompression(g, GetHDRExposure());
-                    b = LogCompression(b, GetHDRExposure());
-                    break;
-
-                case 3: // 新增：极端暗化模式
-                    r = std::pow(std::clamp(r, 0.0f, 1.0f), 2.2f) * GetHDRExposure();
-                    g = std::pow(std::clamp(g, 0.0f, 1.0f), 2.2f) * GetHDRExposure();
-                    b = std::pow(std::clamp(b, 0.0f, 1.0f), 2.2f) * GetHDRExposure();
-                    break;
-
-                default: // 默认使用极端暗化
-                    r = std::clamp(r * 0.2f, 0.0f, 1.0f);
-                    g = std::clamp(g * 0.2f, 0.0f, 1.0f);
-                    b = std::clamp(b * 0.2f, 0.0f, 1.0f);
-                    break;
-                }
-
-                // 跳过伽马校正看看是否有影响
-                // r = LinearToSRGB(r);
-                // g = LinearToSRGB(g);
-                // b = LinearToSRGB(b);
-
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+                // 写入 RGB 输出
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r * 255.0f + 0.5f, 0.0f, 255.0f));
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g * 255.0f + 0.5f, 0.0f, 255.0f));
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b * 255.0f + 0.5f, 0.0f, 255.0f));
             }
         }
     }
 
-    // 添加获取配置的方法
-    int GetHDRMode() const {
-        return config ? config->hdrMode : 1;
-    }
-    float GetHDRExposure() const {
-        return config ? config->hdrExposure : 0.5f;
-    }
+
     bool GetDebugMode() const {
         return config ? config->debugMode : false;
-    }
-
-    static float LogCompression(float x, float exposure) noexcept {
-        if (x <= 0.0f) return 0.0f;
-        x *= exposure;
-        // 对数压缩：log(1+x)/log(1+maxVal)
-        constexpr float maxVal = 10.0f;
-        return std::log(1.0f + x) / std::log(1.0f + maxVal);
     }
 
     void ProcessHDR10(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
@@ -457,7 +393,8 @@ private:
                 float b = PQToLinear(static_cast<float>(b10) / 1023.0f);
 
                 // 归一化到合理范围（PQ解码后是0-10000 nits）
-                constexpr float maxNits = 1000.0f; // 大多数内容的峰值亮度
+                auto meta = GetDisplayHDRMetadata();
+                float maxNits = meta.maxContentLightLevel > 0.0f ? meta.maxContentLightLevel : 1000.0f;
                 r = std::clamp(r / maxNits, 0.0f, 1.0f);
                 g = std::clamp(g / maxNits, 0.0f, 1.0f);
                 b = std::clamp(b / maxNits, 0.0f, 1.0f);
@@ -465,10 +402,10 @@ private:
                 // Rec.2020 到 sRGB 色域转换
                 Rec2020ToSRGB(r, g, b);
 
-                // 简单色调映射
-                r = SimpleToneMapping(r);
-                g = SimpleToneMapping(g);
-                b = SimpleToneMapping(b);
+                // 非线性色调映射
+                r = ACESFilmToneMapping(r);
+                g = ACESFilmToneMapping(g);
+                b = ACESFilmToneMapping(b);
 
                 // sRGB伽马校正
                 r = LinearToSRGB(std::clamp(r, 0.0f, 1.0f));
@@ -486,7 +423,7 @@ private:
         // 添加调试输出
         static bool debugOnce = true;
         if (debugOnce) {
-            std::ofstream debug("process_debug.txt", std::ios::app);
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "调用了 ProcessSDR16Float" << std::endl;
             debugOnce = false;
         }
@@ -544,7 +481,7 @@ private:
         // 添加调试输出
         static bool debugOnce = true;
         if (debugOnce) {
-            std::ofstream debug("process_debug.txt", std::ios::app);
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "ProcessSDR (BGRA) called." << std::endl;
             debugOnce = false;
         }
@@ -561,18 +498,17 @@ private:
         }
     }
 
-    static constexpr float SimpleToneMapping(float x) noexcept {
-        // 非常简单的色调映射，几乎不压缩
-        return x / (1.0f + x * 0.1f);
+    static float ReinhardToneMapping(float x) {
+        return x / (1.0f + x);
     }
 
-    static constexpr float ImprovedToneMapping(float x) noexcept {
-        // Reinhard扩展色调映射，比ACES更温和
-        constexpr float whitePoint = 1.0f;
-        constexpr float exposure = 1.0f;
-
-        x *= exposure;
-        return (x * (1.0f + x / (whitePoint * whitePoint))) / (1.0f + x);
+    static float ACESFilmToneMapping(float x) {
+        const float a = 2.51f;
+        const float b = 0.03f;
+        const float c = 2.43f;
+        const float d = 0.59f;
+        const float e = 0.14f;
+        return std::clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0f, 1.0f);
     }
 
     static float LinearToSRGB(float linear) noexcept {
@@ -616,23 +552,42 @@ private:
         return std::pow(num / den, 1.0f / m1) * 10000.0f;
     }
 
-    static constexpr float HalfToFloat(uint16_t half) noexcept {
-        uint32_t sign = (half >> 15) & 0x1;
-        uint32_t exp = (half >> 10) & 0x1F;
-        uint32_t mantissa = half & 0x3FF;
+    static float HalfToFloat(uint16_t h) {
+        uint16_t h_exp = (h & 0x7C00) >> 10;
+        uint16_t h_sig = h & 0x03FF;
+        uint32_t f_sgn = (h & 0x8000) << 16;
+        uint32_t f_exp, f_sig;
 
-        if (exp == 0) {
-            if (mantissa == 0) return sign ? -0.0f : 0.0f;
-            float value = mantissa / 1024.0f;
-            return sign ? -value * std::pow(2.0f, -14.0f) : value * std::pow(2.0f, -14.0f);
+        if (h_exp == 0) {
+            if (h_sig == 0) {
+                f_exp = 0;
+                f_sig = 0;
+            }
+            else {
+                // Subnormal half-precision number
+                h_exp += 1;
+                while ((h_sig & 0x0400) == 0) {
+                    h_sig <<= 1;
+                    h_exp -= 1;
+                }
+                h_sig &= 0x03FF;
+                f_exp = (h_exp + (127 - 15)) << 23;
+                f_sig = h_sig << 13;
+            }
         }
-        else if (exp == 31) {
-            return sign ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+        else if (h_exp == 0x1F) {
+            f_exp = 0xFF << 23;
+            f_sig = h_sig << 13;
         }
         else {
-            float value = (1.0f + mantissa / 1024.0f) * std::pow(2.0f, exp - 15);
-            return sign ? -value : value;
+            f_exp = (h_exp + (127 - 15)) << 23;
+            f_sig = h_sig << 13;
         }
+
+        uint32_t f = f_sgn | f_exp | f_sig;
+        float result;
+        memcpy(&result, &f, sizeof(result));
+        return result;
     }
 
     bool SavePNG(std::span<const uint8_t> data, int width, int height, const std::string& filename) {
@@ -1070,9 +1025,6 @@ private:
                 else if (key == "SavePath") config.savePath = value;
                 else if (key == "AutoStart") config.autoStart = (value == "true");
                 else if (key == "SaveToFile") config.saveToFile = (value == "true");
-                else if (key == "HDRExposure") config.hdrExposure = std::stof(value);
-                else if (key == "HDRWhitePoint") config.hdrWhitePoint = std::stof(value);
-                else if (key == "HDRMode") config.hdrMode = std::stoi(value);
                 else if (key == "DebugMode") config.debugMode = (value == "true");
             }
         }
@@ -1087,13 +1039,7 @@ private:
             << std::format("SavePath={}\n", config.savePath)
             << std::format("AutoStart={}\n", config.autoStart ? "true" : "false")
             << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false")
-            << "\n; HDR Processing Settings\n"
-            << "; HDRExposure: 0.1-2.0, lower=darker (try 0.3 if still too bright)\n"
-            << std::format("HDRExposure={}\n", config.hdrExposure)
-            << std::format("HDRWhitePoint={}\n", config.hdrWhitePoint)
-            << "; HDRMode: 0=clip, 1=compress+clip, 2=log compression, 3=extreme darken\n"
-            << std::format("HDRMode={}\n", config.hdrMode)
-            << "; DebugMode: outputs raw HDR values to debug file\n"
+            << "\n; Debug settings\n"
             << std::format("DebugMode={}\n", config.debugMode ? "true" : "false");
     }
 
