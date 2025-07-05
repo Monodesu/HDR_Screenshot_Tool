@@ -6,13 +6,6 @@
 #include <d3d11.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
-#include <windows.graphics.capture.h>
-#include <windows.graphics.capture.interop.h>
-#include <windows.graphics.directx.direct3d11.interop.h>
-#include <winrt/base.h>
-#include <winrt/Windows.Graphics.Capture.h>
-#include <winrt/Windows.Graphics.DirectX.h>
-#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <gdiplus.h>
 #include <shlobj.h>     // for SHGetSpecialFolderPath, CSIDL_STARTUP
 #include <objbase.h>    // for CoCreateInstance
@@ -41,17 +34,11 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "windowsapp")
 
 using Microsoft::WRL::ComPtr;
 using namespace Gdiplus;
 using namespace std::string_literals;
 using namespace std::chrono;
-
-static HRESULT CreateCaptureItemInterop(REFIID iid, void** result) {
-        auto factory = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-        return factory->QueryInterface(iid, result);
-}
 
 // 资源ID定义
 #define IDI_TRAY_ICON 101
@@ -82,34 +69,26 @@ struct Config {
 class HDRScreenCapture {
 private:
         struct MonitorInfo {
-                HMONITOR handle{};
-                winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{ nullptr };
-                winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{ nullptr };
-                winrt::Windows::Graphics::Capture::GraphicsCaptureSession session{ nullptr };
+                ComPtr<IDXGIOutput6> output6;
+                ComPtr<IDXGIOutputDuplication> dupl;
                 RECT desktopRect{};
+                UINT width = 0;
+                UINT height = 0;
+                DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
         };
         bool InitMonitor(MonitorInfo& info) {
-                using namespace winrt::Windows::Graphics::Capture;
-                ComPtr<IGraphicsCaptureItemInterop> interop;
-                if (FAILED(CreateCaptureItemInterop(IID_PPV_ARGS(&interop)))) return false;
-
-                winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{ nullptr };
-                if (FAILED(interop->CreateForMonitor(info.handle, __uuidof(IGraphicsCaptureItem), reinterpret_cast<void**>(winrt::put_abi(item))))) {
-                        return false;
+                DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                HRESULT hr = info.output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &info.dupl);
+                if (FAILED(hr)) {
+                        hr = info.output6->DuplicateOutput(d3dDevice.Get(), &info.dupl);
                 }
-                info.item = item;
+                if (FAILED(hr)) return false;
 
-                auto size = item.Size();
-
-                ComPtr<IDXGIDevice> dxgiDevice;
-                d3dDevice.As(&dxgiDevice);
-                winrt::com_ptr<IUnknown> d3d11;
-                CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.Get(), d3d11.put());
-
-                auto winrtDevice = d3d11.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
-                info.framePool = Direct3D11CaptureFramePool::Create(winrtDevice, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 1, size);
-                info.session = info.framePool.CreateCaptureSession(item);
-                info.session.IsCursorCaptureEnabled(false);
+                DXGI_OUTDUPL_DESC dd{};
+                info.dupl->GetDesc(&dd);
+                info.rotation = dd.Rotation;
+                info.width = dd.ModeDesc.Width;
+                info.height = dd.ModeDesc.Height;
 
                 return true;
         }
@@ -159,10 +138,10 @@ public:
                         if (FAILED(adapter->EnumOutputs(i, &output))) break;
 
                         MonitorInfo info{};
-                        DXGI_OUTPUT_DESC desc;
-                        if (FAILED(output->GetDesc(&desc))) break;
+                        if (FAILED(output.As(&info.output6))) break;
 
-                        info.handle = desc.Monitor;
+                        DXGI_OUTPUT_DESC desc;
+                        info.output6->GetDesc(&desc);
                         info.desktopRect = desc.DesktopCoordinates;
 
                         virtualRect.left = std::min(virtualRect.left, desc.DesktopCoordinates.left);
@@ -190,66 +169,102 @@ public:
                 return true;
         }
 
-        bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
-                RECT regionRect{ x, y, x + width, y + height };
+       bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
+               RECT regionRect{ x, y, x + width, y + height };
 
-                DXGI_FORMAT format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                UINT bpp = 4;
-                std::vector<uint8_t> buffer(width * height * bpp, 0);
-                bool gotFrame = false;
+               DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+               UINT bpp = 0;
+               std::vector<uint8_t> buffer;
+               bool gotFrame = false;
+               bool allSuccess = true;
 
                 for (auto& m : monitors) {
                         RECT inter{};
                         if (!IntersectRect(&inter, &regionRect, &m.desktopRect)) continue;
 
-                        m.session.StartCapture();
-                        auto frame = m.framePool.TryGetNextFrame();
-                        if (!frame) continue;
-                        gotFrame = true;
+                        ComPtr<IDXGIResource> resource;
+                        DXGI_OUTDUPL_FRAME_INFO frameInfo;
+                       HRESULT hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
+                       if (FAILED(hr)) {
+                               if (hr == DXGI_ERROR_ACCESS_LOST) InitMonitor(m);
+                               hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
+                       }
+                       if (FAILED(hr)) { allSuccess = false; continue; }
+                       gotFrame = true;
 
-                        auto surface = frame.Surface();
+                        auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
+                        std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
+
                         ComPtr<ID3D11Texture2D> texture;
-                        GetDXGIInterfaceFromObject(surface, IID_PPV_ARGS(&texture));
+                        if (FAILED(resource.As(&texture))) continue;
 
                         D3D11_TEXTURE2D_DESC desc{};
                         texture->GetDesc(&desc);
+                        if (format == DXGI_FORMAT_UNKNOWN) {
+                                format = desc.Format;
+                                bpp = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+                                buffer.resize(width * height * bpp);
+                        }
 
-                        ComPtr<ID3D11Texture2D> staging;
                         D3D11_TEXTURE2D_DESC stagingDesc = desc;
                         stagingDesc.Usage = D3D11_USAGE_STAGING;
                         stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
                         stagingDesc.BindFlags = 0;
                         stagingDesc.MiscFlags = 0;
-                        d3dDevice->CreateTexture2D(&stagingDesc, nullptr, &staging);
+                        ComPtr<ID3D11Texture2D> staging;
+                        if (FAILED(d3dDevice->CreateTexture2D(&stagingDesc, nullptr, &staging))) continue;
                         d3dContext->CopyResource(staging.Get(), texture.Get());
 
                         D3D11_MAPPED_SUBRESOURCE mapped{};
-                        if (SUCCEEDED(d3dContext->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-                                int destX = inter.left - x;
-                                int destY = inter.top - y;
-                                int rw = inter.right - inter.left;
-                                int rh = inter.bottom - inter.top;
+                        if (FAILED(d3dContext->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) continue;
 
-                                int rx0 = inter.left - m.desktopRect.left;
-                                int ry0 = inter.top - m.desktopRect.top;
+                        auto unmap = [&](void*) { d3dContext->Unmap(staging.Get(), 0); };
+                        std::unique_ptr<void, decltype(unmap)> mapGuard(reinterpret_cast<void*>(1), unmap);
 
-                                for (int row = 0; row < rh; ++row) {
-                                        auto* src = static_cast<const uint8_t*>(mapped.pData) + (ry0 + row) * mapped.RowPitch + rx0 * bpp;
-                                        auto* dst = buffer.data() + ((destY + row) * width + destX) * bpp;
-                                        memcpy(dst, src, rw * bpp);
+                        int destX = inter.left - x;
+                        int destY = inter.top - y;
+                        int rw = inter.right - inter.left;
+                        int rh = inter.bottom - inter.top;
+
+                        int rx0 = inter.left - m.desktopRect.left;
+                        int ry0 = inter.top - m.desktopRect.top;
+
+                        for (int row = 0; row < rh; ++row) {
+                                for (int col = 0; col < rw; ++col) {
+                                        int rx = rx0 + col;
+                                        int ry = ry0 + row;
+
+                                        int u = rx, v = ry;
+                                        switch (m.rotation) {
+                                        case DXGI_MODE_ROTATION_ROTATE90:
+                                                u = ry;
+                                                v = static_cast<int>(m.width) - rx - 1;
+                                                break;
+                                        case DXGI_MODE_ROTATION_ROTATE180:
+                                                u = static_cast<int>(m.width) - rx - 1;
+                                                v = static_cast<int>(m.height) - ry - 1;
+                                                break;
+                                        case DXGI_MODE_ROTATION_ROTATE270:
+                                                u = static_cast<int>(m.height) - ry - 1;
+                                                v = rx;
+                                                break;
+                                        default:
+                                                break;
+                                        }
+
+                                        const uint8_t* src = static_cast<const uint8_t*>(mapped.pData) + v * mapped.RowPitch + u * bpp;
+                                        uint8_t* dst = buffer.data() + ((destY + row) * width + destX + col) * bpp;
+                                        memcpy(dst, src, bpp);
                                 }
-
-                                d3dContext->Unmap(staging.Get(), 0);
                         }
-
-                        m.framePool.Close();
-                        m.session.Close();
-                        InitMonitor(m);
                 }
 
-                if (!gotFrame) return false;
+               if (!gotFrame || !allSuccess ||
+                   std::all_of(buffer.begin(), buffer.end(), [](uint8_t v) { return v == 0; })) {
+                        return CaptureRegionGDI(x, y, width, height, filename);
+               }
 
-                return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
+               return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
         }
 
         bool CaptureFullscreen(const std::string& filename = "") {
@@ -257,19 +272,127 @@ public:
         }
 
 private:
-        void DetectHDRStatus() {
-                // 使用 Windows Graphics Capture 时无法直接查询 HDR 设置，默认启用 HDR 处理
-                isHDREnabled = true;
+        bool CaptureRegionGDI(int x, int y, int width, int height, const std::string& filename) {
+                HDC screenDC = GetDC(nullptr);
+                HDC memDC = CreateCompatibleDC(screenDC);
+                BITMAPINFO bmi{};
+                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                bmi.bmiHeader.biWidth = width;
+                bmi.bmiHeader.biHeight = -height; // top-down
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB;
+                void* bits = nullptr;
+                HBITMAP hBitmap = CreateDIBSection(memDC, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+                if (!hBitmap) {
+                        DeleteDC(memDC);
+                        ReleaseDC(nullptr, screenDC);
+                        return false;
+                }
+                auto old = SelectObject(memDC, hBitmap);
+                BitBlt(memDC, 0, 0, width, height, screenDC, x, y, SRCCOPY);
+
+                // GDI 捕获只会得到已经色调映射到 SDR 的图像
+                if (GetDebugMode() && isHDREnabled) {
+                        std::ofstream debug("debug.txt", std::ios::app);
+                        debug << "Fallback to GDI - HDR data unavailable" << std::endl;
+                }
+
+                std::vector<uint8_t> buffer(width * height * 4);
+                memcpy(buffer.data(), bits, buffer.size());
+
+                SelectObject(memDC, old);
+                DeleteObject(hBitmap);
+                DeleteDC(memDC);
+                ReleaseDC(nullptr, screenDC);
+
+                return ProcessAndSave(buffer.data(), width, height, width * 4, DXGI_FORMAT_B8G8R8A8_UNORM, filename);
         }
+
+        void DetectHDRStatus() {
+		// 检测显示器是否支持HDR并已启用
+		DXGI_OUTPUT_DESC1 outputDesc1;
+		isHDREnabled = false; // 默认为false
+
+                if (!monitors.empty()) {
+                        ComPtr<IDXGIOutput6> output6Temp;
+                        if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
+				if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
+					if (GetDebugMode()) {
+						std::ofstream debug("debug.txt", std::ios::app);
+						debug << "Monitor Info:" << std::endl;
+						debug << "ColorSpace: " << static_cast<int>(outputDesc1.ColorSpace) << std::endl;
+						debug << "MaxLuminance: " << outputDesc1.MaxLuminance << std::endl;
+						debug << "MinLuminance: " << outputDesc1.MinLuminance << std::endl;
+						debug << "MaxFullFrameLuminance: " << outputDesc1.MaxFullFrameLuminance << std::endl;
+					}
+
+					// Windows HDR模式的颜色空间检查
+					// DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 = 12
+					// DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 = 1
+					isHDREnabled = (outputDesc1.ColorSpace == 12) || // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
+						(outputDesc1.ColorSpace == 1);    // DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
+
+					if (GetDebugMode()) {
+						std::ofstream debug("debug.txt", std::ios::app);
+						debug << "HDR detection based on ColorSpace: " << (isHDREnabled ? "Yes" : "No") << std::endl;
+						debug.close();
+					}
+
+					// 额外检查：如果MaxLuminance > 80，也认为是HDR
+					if (!isHDREnabled && outputDesc1.MaxLuminance > 80.0f) {
+						isHDREnabled = true;
+						if (GetDebugMode()) {
+							std::ofstream debug("debug.txt", std::ios::app);
+							debug << "HDR detection based on MaxLuminance: Yes" << std::endl;
+							debug.close();
+						}
+					}
+
+					// 强制检测：暂时假设任何非默认设置都是HDR
+					if (!isHDREnabled) {
+						isHDREnabled = true; // 强制启用HDR处理进行测试
+						if (GetDebugMode()) {
+							std::ofstream debug("debug.txt", std::ios::app);
+							debug << "Force HDR processing to be enabled for testing" << std::endl;
+							debug.close();
+						}
+					}
+
+					if (GetDebugMode()) {
+						std::ofstream debug("debug.txt", std::ios::app);
+						debug << "HDR Status: " << (isHDREnabled ? "Enabled" : "Disabled") << std::endl;
+						debug.close();
+					}
+				}
+			}
+		}
+
+		// 如果无法获取信息，默认启用HDR处理
+		if (!isHDREnabled) {
+			isHDREnabled = true;
+			if (GetDebugMode()) {
+				std::ofstream debug("debug.txt", std::ios::app);
+				debug << "Unable to obtain display information, HDR processing is enabled by default" << std::endl;
+				debug.close();
+			}
+		}
+	}
 
 	HDRMetadata GetDisplayHDRMetadata() {
 		HDRMetadata metadata;
 
                 if (!monitors.empty()) {
-                        metadata.maxLuminance = 1000.0f;
-                        metadata.minLuminance = 0.1f;
-                        metadata.maxContentLightLevel = 1000.0f;
-                }
+                        ComPtr<IDXGIOutput6> output6Temp;
+                        if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
+				DXGI_OUTPUT_DESC1 outputDesc1;
+				if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
+					metadata.maxLuminance = outputDesc1.MaxLuminance;
+					metadata.minLuminance = outputDesc1.MinLuminance;
+					metadata.maxContentLightLevel = outputDesc1.MaxFullFrameLuminance;
+				}
+			}
+		}
 
 		return metadata;
 	}
@@ -1463,10 +1586,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	auto gdiplusGuard = [gdiplusToken](void*) { GdiplusShutdown(gdiplusToken); };
 	std::unique_ptr<void, decltype(gdiplusGuard)> gdiplusCleanup(reinterpret_cast<void*>(1), gdiplusGuard);
 
-        // 初始化 WinRT
-        winrt::init_apartment();
-        auto comGuard = [](void*) { winrt::uninit_apartment(); };
-        std::unique_ptr<void, decltype(comGuard)> comCleanup(reinterpret_cast<void*>(1), comGuard);
+	// 初始化COM
+	CoInitialize(nullptr);
+	auto comGuard = [](void*) { CoUninitialize(); };
+	std::unique_ptr<void, decltype(comGuard)> comCleanup(reinterpret_cast<void*>(1), comGuard);
 
 	// 创建并运行应用程序
 	auto app = std::make_unique<ScreenshotApp>();
