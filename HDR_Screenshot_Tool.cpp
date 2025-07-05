@@ -54,6 +54,8 @@ struct Config {
     bool autoStart = false;
     bool saveToFile = true;
     bool debugMode = false; // 调试模式
+    bool useACESFilmToneMapping = false; // 使用ACES色调映射
+    float sdrBrightness = 250.0f;       // SDR目标亮度
 };
 
 // HDR截图类
@@ -188,13 +190,14 @@ private:
             ComPtr<IDXGIOutput6> output6Temp;
             if (SUCCEEDED(output6.As(&output6Temp))) {
                 if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
-                    // 输出调试信息
-                    std::ofstream debug("debug.txt", std::ios::app);
-                    debug << "Monitor Info:" << std::endl;
-                    debug << "ColorSpace: " << static_cast<int>(outputDesc1.ColorSpace) << std::endl;
-                    debug << "MaxLuminance: " << outputDesc1.MaxLuminance << std::endl;
-                    debug << "MinLuminance: " << outputDesc1.MinLuminance << std::endl;
-                    debug << "MaxFullFrameLuminance: " << outputDesc1.MaxFullFrameLuminance << std::endl;
+                    if (GetDebugMode()) {
+                        std::ofstream debug("debug.txt", std::ios::app);
+                        debug << "Monitor Info:" << std::endl;
+                        debug << "ColorSpace: " << static_cast<int>(outputDesc1.ColorSpace) << std::endl;
+                        debug << "MaxLuminance: " << outputDesc1.MaxLuminance << std::endl;
+                        debug << "MinLuminance: " << outputDesc1.MinLuminance << std::endl;
+                        debug << "MaxFullFrameLuminance: " << outputDesc1.MaxFullFrameLuminance << std::endl;
+                    }
 
                     // Windows HDR模式的颜色空间检查
                     // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 = 12
@@ -202,22 +205,37 @@ private:
                     isHDREnabled = (outputDesc1.ColorSpace == 12) || // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
                         (outputDesc1.ColorSpace == 1);    // DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
 
-                    debug << "HDR detection based on ColorSpace: " << (isHDREnabled ? "Yes" : "No") << std::endl;
+                    if (GetDebugMode()) {
+                        std::ofstream debug("debug.txt", std::ios::app);
+                        debug << "HDR detection based on ColorSpace: " << (isHDREnabled ? "Yes" : "No") << std::endl;
+                        debug.close();
+                    }
 
                     // 额外检查：如果MaxLuminance > 80，也认为是HDR
                     if (!isHDREnabled && outputDesc1.MaxLuminance > 80.0f) {
                         isHDREnabled = true;
-                        debug << "HDR detection based on MaxLuminance: Yes" << std::endl;
+                        if (GetDebugMode()) {
+                            std::ofstream debug("debug.txt", std::ios::app);
+                            debug << "HDR detection based on MaxLuminance: Yes" << std::endl;
+                            debug.close();
+                        }
                     }
 
                     // 强制检测：暂时假设任何非默认设置都是HDR
                     if (!isHDREnabled) {
                         isHDREnabled = true; // 强制启用HDR处理进行测试
-                        debug << "Force HDR processing to be enabled for testing" << std::endl;
+                        if (GetDebugMode()) {
+                            std::ofstream debug("debug.txt", std::ios::app);
+                            debug << "Force HDR processing to be enabled for testing" << std::endl;
+                            debug.close();
+                        }
                     }
 
-                    debug << "HDR Status: " << (isHDREnabled ? "Enabled" : "Disabled") << std::endl;
-                    debug.close();
+                    if (GetDebugMode()) {
+                        std::ofstream debug("debug.txt", std::ios::app);
+                        debug << "HDR Status: " << (isHDREnabled ? "Enabled" : "Disabled") << std::endl;
+                        debug.close();
+                    }
                 }
             }
         }
@@ -225,9 +243,11 @@ private:
         // 如果无法获取信息，默认启用HDR处理
         if (!isHDREnabled) {
             isHDREnabled = true;
-            std::ofstream debug("debug.txt", std::ios::app);
-            debug << "Unable to obtain display information, HDR processing is enabled by default" << std::endl;
-            debug.close();
+            if (GetDebugMode()) {
+                std::ofstream debug("debug.txt", std::ios::app);
+                debug << "Unable to obtain display information, HDR processing is enabled by default" << std::endl;
+                debug.close();
+            }
         }
     }
 
@@ -256,7 +276,7 @@ private:
 
         // 添加调试信息
         static bool debugOnce = true;
-        if (debugOnce) {
+        if (GetDebugMode() && debugOnce) {
             std::ofstream debug("debug.txt", std::ios::app);
             debug << "DXGI Format: " << static_cast<int>(format) << std::endl;
             debug << "HDR Detected: " << (isHDREnabled ? "Yes" : "No") << std::endl;
@@ -336,8 +356,8 @@ private:
         auto meta = GetDisplayHDRMetadata();
         float maxNits = meta.maxLuminance > 0.0f ? meta.maxLuminance : 1000.0f;
 
-        // 目标 SDR 显示亮度，使用 250 nits 作为日常最常用亮度
-        float targetNits = 250.0f;
+        // 目标 SDR 显示亮度
+        float targetNits = config ? config->sdrBrightness : 250.0f;
 
         // 计算曝光系数
         float exposure = targetNits / maxNits;
@@ -351,10 +371,16 @@ private:
                 float g = HalfToFloat(srcRow[x * 4 + 1]) * exposure;
                 float b = HalfToFloat(srcRow[x * 4 + 2]) * exposure;
 
-                // ACES 色调映射
-                r = ACESFilmToneMapping(r);
-                g = ACESFilmToneMapping(g);
-                b = ACESFilmToneMapping(b);
+                // 色调映射
+                if (config && config->useACESFilmToneMapping) {
+                    r = ACESFilmToneMapping(r);
+                    g = ACESFilmToneMapping(g);
+                    b = ACESFilmToneMapping(b);
+                } else {
+                    r = ReinhardToneMapping(r);
+                    g = ReinhardToneMapping(g);
+                    b = ReinhardToneMapping(b);
+                }
 
                 // sRGB 伽马校正
                 r = LinearToSRGB(r);
@@ -392,20 +418,27 @@ private:
                 float g = PQToLinear(static_cast<float>(g10) / 1023.0f);
                 float b = PQToLinear(static_cast<float>(b10) / 1023.0f);
 
-                // 归一化到合理范围（PQ解码后是0-10000 nits）
                 auto meta = GetDisplayHDRMetadata();
                 float maxNits = meta.maxContentLightLevel > 0.0f ? meta.maxContentLightLevel : 1000.0f;
-                r = std::clamp(r / maxNits, 0.0f, 1.0f);
-                g = std::clamp(g / maxNits, 0.0f, 1.0f);
-                b = std::clamp(b / maxNits, 0.0f, 1.0f);
+                float targetNits = config ? config->sdrBrightness : 250.0f;
+                float exposure = targetNits / maxNits;
+                r = r * exposure;
+                g = g * exposure;
+                b = b * exposure;
 
                 // Rec.2020 到 sRGB 色域转换
                 Rec2020ToSRGB(r, g, b);
 
                 // 非线性色调映射
-                r = ACESFilmToneMapping(r);
-                g = ACESFilmToneMapping(g);
-                b = ACESFilmToneMapping(b);
+                if (config && config->useACESFilmToneMapping) {
+                    r = ACESFilmToneMapping(r);
+                    g = ACESFilmToneMapping(g);
+                    b = ACESFilmToneMapping(b);
+                } else {
+                    r = ReinhardToneMapping(r);
+                    g = ReinhardToneMapping(g);
+                    b = ReinhardToneMapping(b);
+                }
 
                 // sRGB伽马校正
                 r = LinearToSRGB(std::clamp(r, 0.0f, 1.0f));
@@ -422,7 +455,7 @@ private:
     void ProcessSDR16Float(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
         // 添加调试输出
         static bool debugOnce = true;
-        if (debugOnce) {
+        if (GetDebugMode() && debugOnce) {
             std::ofstream debug("debug.txt", std::ios::app);
             debug << "调用了 ProcessSDR16Float" << std::endl;
             debugOnce = false;
@@ -480,7 +513,7 @@ private:
     void ProcessSDR(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
         // 添加调试输出
         static bool debugOnce = true;
-        if (debugOnce) {
+        if (GetDebugMode() && debugOnce) {
             std::ofstream debug("debug.txt", std::ios::app);
             debug << "ProcessSDR (BGRA) called." << std::endl;
             debugOnce = false;
@@ -1026,6 +1059,8 @@ private:
                 else if (key == "AutoStart") config.autoStart = (value == "true");
                 else if (key == "SaveToFile") config.saveToFile = (value == "true");
                 else if (key == "DebugMode") config.debugMode = (value == "true");
+                else if (key == "UseACESFilmToneMapping") config.useACESFilmToneMapping = (value == "true");
+                else if (key == "SDRBrightness") config.sdrBrightness = std::stof(value);
             }
         }
     }
@@ -1040,7 +1075,10 @@ private:
             << std::format("AutoStart={}\n", config.autoStart ? "true" : "false")
             << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false")
             << "\n; Debug settings\n"
-            << std::format("DebugMode={}\n", config.debugMode ? "true" : "false");
+            << std::format("DebugMode={}\n", config.debugMode ? "true" : "false")
+            << "\n; HDR settings\n"
+            << std::format("UseACESFilmToneMapping={}\n", config.useACESFilmToneMapping ? "true" : "false")
+            << std::format("SDRBrightness={}\n", config.sdrBrightness);
     }
 
     void CreateTrayIcon() {
