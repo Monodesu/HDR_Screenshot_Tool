@@ -54,7 +54,7 @@ struct Config {
     bool autoStart = false;
     bool saveToFile = true;
     bool debugMode = false; // 调试模式
-    bool useACESFilmToneMapping = true; // 使用ACES色调映射
+    bool useACESFilmToneMapping = false; // 使用ACES色调映射
     float sdrBrightness = 250.0f;       // SDR目标亮度
 };
 
