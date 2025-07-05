@@ -62,11 +62,20 @@ struct Config {
         bool useACESFilmToneMapping = false; // 使用ACES色调映射
         float sdrBrightness = 250.0f;       // SDR目标亮度
         bool fullscreenCurrentMonitor = false; // 仅截取指针所在显示器
+        bool regionFullscreenMonitor = true;   // 全屏程序下区域截图是否截取当前显示器
 };
 
 // HDR截图类
 class HDRScreenCapture {
 private:
+        struct MonitorInfo {
+                ComPtr<IDXGIOutput6> output6;
+                ComPtr<IDXGIOutputDuplication> dupl;
+                RECT desktopRect{};
+                UINT width = 0;
+                UINT height = 0;
+                DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
+        };
         bool InitMonitor(MonitorInfo& info) {
                 DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
                 HRESULT hr = info.output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &info.dupl);
@@ -83,16 +92,8 @@ private:
 
                 return true;
         }
-	ComPtr<ID3D11Device> d3dDevice;
-	ComPtr<ID3D11DeviceContext> d3dContext;
-        struct MonitorInfo {
-                ComPtr<IDXGIOutput6> output6;
-                ComPtr<IDXGIOutputDuplication> dupl;
-                RECT desktopRect{};
-                UINT width = 0;
-                UINT height = 0;
-                DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
-        };
+        ComPtr<ID3D11Device> d3dDevice;
+        ComPtr<ID3D11DeviceContext> d3dContext;
         std::vector<MonitorInfo> monitors;
         int virtualLeft = 0;
         int virtualTop = 0;
@@ -183,7 +184,7 @@ public:
                         DXGI_OUTDUPL_FRAME_INFO frameInfo;
                         HRESULT hr = m.dupl->AcquireNextFrame(1000, &frameInfo, &resource);
                         if (FAILED(hr)) {
-                                if (hr == DXGI_ERROR_ACCESS_LOST && InitMonitor(m)) {
+                                if (InitMonitor(m)) {
                                         hr = m.dupl->AcquireNextFrame(1000, &frameInfo, &resource);
                                 }
                         }
@@ -834,9 +835,10 @@ private:
 	HBITMAP oldBitmap = nullptr;
 
 public:
-	RECT selectedRect{};
+        RECT selectedRect{};
+        HWND GetHwnd() const { return hwnd; }
 
-	bool Create(HWND msgWnd) {
+        bool Create(HWND msgWnd) {
 		messageWnd = msgWnd;
 		WNDCLASS wc{
 			.lpfnWndProc = WindowProc,
@@ -1152,6 +1154,7 @@ private:
                                 else if (key == "UseACESFilmToneMapping") config.useACESFilmToneMapping = (value == "true");
                                 else if (key == "SDRBrightness") config.sdrBrightness = std::stof(value);
                                 else if (key == "FullscreenCurrentMonitor") config.fullscreenCurrentMonitor = (value == "true");
+                                else if (key == "RegionFullscreenMonitor") config.regionFullscreenMonitor = (value == "true");
                         }
                 }
         }
@@ -1171,7 +1174,8 @@ private:
                         << "\n; HDR settings\n"
                         << std::format("UseACESFilmToneMapping={}\n", config.useACESFilmToneMapping ? "true" : "false")
                         << std::format("SDRBrightness={}\n", config.sdrBrightness)
-                        << std::format("\nFullscreenCurrentMonitor={}\n", config.fullscreenCurrentMonitor ? "true" : "false");
+                        << std::format("\nFullscreenCurrentMonitor={}\n", config.fullscreenCurrentMonitor ? "true" : "false")
+                        << std::format("\nRegionFullscreenMonitor={}\n", config.regionFullscreenMonitor ? "true" : "false");
         }
 
 	void CreateTrayIcon() {
@@ -1201,9 +1205,9 @@ private:
 		}
 	}
 
-	std::pair<UINT, UINT> ParseHotkey(std::string_view hotkey) {
-		UINT modifiers = 0;
-		UINT vkey = 0;
+        std::pair<UINT, UINT> ParseHotkey(std::string_view hotkey) {
+                UINT modifiers = 0;
+                UINT vkey = 0;
 
 		auto lower = std::string(hotkey);
 		std::ranges::transform(lower, lower.begin(), ::tolower);
@@ -1215,10 +1219,30 @@ private:
 		// 简单的键码映射
 		if (lower.find("+a") != std::string::npos) vkey = 'A';
 		else if (lower.find("+s") != std::string::npos) vkey = 'S';
-		else if (lower.find("+d") != std::string::npos) vkey = 'D';
+                else if (lower.find("+d") != std::string::npos) vkey = 'D';
 
-		return { modifiers, vkey };
-	}
+                return { modifiers, vkey };
+        }
+
+        bool GetForegroundFullscreenRect(RECT& rect) {
+                HWND fg = GetForegroundWindow();
+                if (!fg || IsIconic(fg)) return false;
+                if (overlay && fg == overlay->GetHwnd()) return false;
+
+                HMONITOR mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi{ sizeof(mi) };
+                if (!GetMonitorInfo(mon, &mi)) return false;
+
+                RECT wrect{};
+                if (!GetWindowRect(fg, &wrect)) return false;
+
+                if (wrect.left <= mi.rcMonitor.left && wrect.top <= mi.rcMonitor.top &&
+                        wrect.right >= mi.rcMonitor.right && wrect.bottom >= mi.rcMonitor.bottom) {
+                        rect = mi.rcMonitor;
+                        return true;
+                }
+                return false;
+        }
 
 	void ShowTrayMenu() {
 		auto menu = CreatePopupMenu();
@@ -1304,9 +1328,37 @@ private:
 		SaveConfig();
 	}
 
-	void TakeRegionScreenshot() {
-		overlay->Show();
-	}
+        void TakeRegionScreenshot() {
+                RECT full;
+                if (GetForegroundFullscreenRect(full)) {
+                        if (!config.regionFullscreenMonitor) return;
+
+                        std::optional<std::string> filename;
+                        if (config.saveToFile) {
+                                CreateDirectoryW(std::wstring(config.savePath.begin(), config.savePath.end()).c_str(), nullptr);
+                                auto now = system_clock::now();
+                                auto time_t = system_clock::to_time_t(now);
+                                std::tm tm; localtime_s(&tm, &time_t);
+                                filename = std::format("{}/screenshot_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}.png",
+                                        config.savePath, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                                        tm.tm_hour, tm.tm_min, tm.tm_sec);
+                        }
+
+                        int w = full.right - full.left;
+                        int h = full.bottom - full.top;
+                        if (capture->CaptureRegion(full.left, full.top, w, h, filename.value_or(""))) {
+                                if (config.saveToFile && filename) {
+                                        ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
+                                } else {
+                                        ShowNotification(L"截图已复制到剪贴板");
+                                }
+                        } else {
+                                ShowNotification(L"截图失败");
+                        }
+                } else {
+                        overlay->Show();
+                }
+        }
 
 	void TakeFullscreenScreenshot() {
 		std::optional<std::string> filename;

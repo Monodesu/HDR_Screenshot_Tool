@@ -60,6 +60,7 @@
 - 按住鼠标左键拖拽选择区域
 - 释放鼠标完成截图
 - 按 `Esc` 或鼠标右键取消
+- 如果当前为全屏程序，按下热键会根据 `RegionFullscreenMonitor` 设置截取该显示器或忽略
 
 #### 全屏截图
 - **默认热键**: `Ctrl + Shift + Alt + A`
@@ -94,6 +95,7 @@ DebugMode=false
 UseACESFilmToneMapping=false
 SDRBrightness=250.0
 FullscreenCurrentMonitor=false
+RegionFullscreenMonitor=true
 ```
 
 #### 配置说明
@@ -110,6 +112,7 @@ FullscreenCurrentMonitor=false
 | `UseACESFilmToneMapping` | 使用ACES色调映射 | `false` |
 | `SDRBrightness` | SDR目标亮度(nits) | `250.0` |
 | `FullscreenCurrentMonitor` | 全屏截图时仅截取指针所在显示器 | `false` |
+| `RegionFullscreenMonitor` | 全屏程序下按区域截图时截取当前显示器 | `true` |
 
 ### 热键格式
 
