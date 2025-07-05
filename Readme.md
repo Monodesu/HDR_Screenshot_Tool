@@ -14,6 +14,10 @@
 - **剪贴板集成**: 截图自动复制到剪贴板
 - **文件保存**: 可选择同时保存到文件
 - **可视化选择**: 带有实时尺寸显示的选择框
+- **多显示器支持**: 可在多屏环境下截图
+- **旋转显示兼容**: 自动根据显示器旋转角度校正截图
+- **兼容模式回退**: DXGI 截图失败或黑屏时立即尝试 GDI 方式（仅SDR）
+- **稳定性优化**: 截图失败时会自动重新初始化以适应全屏程序
 
 ## 系统要求
 
@@ -54,13 +58,16 @@
 #### 区域截图
 - **默认热键**: `Ctrl + Alt + A`
 - 按下热键后屏幕会显示半透明覆盖层
+- 多显示器环境下会覆盖所有显示器
 - 按住鼠标左键拖拽选择区域
 - 释放鼠标完成截图
 - 按 `Esc` 或鼠标右键取消
+- 如果当前为全屏程序，按下热键会根据 `RegionFullscreenMonitor` 设置截取该显示器或忽略
 
 #### 全屏截图
 - **默认热键**: `Ctrl + Shift + Alt + A`
 - 按下热键立即截取整个屏幕
+- 可通过 `FullscreenCurrentMonitor` 选项仅截取指针所在显示器
 
 #### 系统托盘菜单
 右键点击托盘图标可以访问：
@@ -89,6 +96,8 @@ DebugMode=false
 ; HDR settings
 UseACESFilmToneMapping=false
 SDRBrightness=250.0
+FullscreenCurrentMonitor=false
+RegionFullscreenMonitor=true
 ```
 
 #### 配置说明
@@ -104,6 +113,8 @@ SDRBrightness=250.0
 | `DebugMode` | 调试模式 | `false` |
 | `UseACESFilmToneMapping` | 使用ACES色调映射 | `false` |
 | `SDRBrightness` | SDR目标亮度(nits) | `250.0` |
+| `FullscreenCurrentMonitor` | 全屏截图时仅截取指针所在显示器 | `false` |
+| `RegionFullscreenMonitor` | 全屏程序下按区域截图时截取当前显示器 | `true` |
 
 ### 热键格式
 
@@ -126,6 +137,7 @@ SDRBrightness=250.0
 - **R16G16B16A16_FLOAT**: 16位浮点HDR格式
 - **R10G10B10A2_UNORM**: 10位HDR格式 (HDR10)
 - **传统BGRA格式**: 8位SDR格式
+  - GDI 兼容模式下只能获得此格式，HDR 信息会丢失
 
 ### 色调映射算法
 
@@ -170,6 +182,9 @@ tone_mapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)
 - 检查 `SavePath` 目录权限
 - 确保磁盘空间充足
 - 检查文件名是否包含非法字符
+ - 程序会在截图失败时自动重新初始化，若仍失败可稍等片刻再次尝试
+- 若 DXGI 截图失败或为纯黑画面，工具会回退到兼容模式(GDI) 再次尝试，
+  此模式无法获取HDR信息，截图将以SDR保存
 
 ### 调试模式
 
