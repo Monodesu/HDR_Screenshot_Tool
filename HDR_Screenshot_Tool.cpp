@@ -259,7 +259,8 @@ public:
                         }
                 }
 
-               if (!gotFrame || !allSuccess) {
+               if (!gotFrame || !allSuccess ||
+                   std::all_of(buffer.begin(), buffer.end(), [](uint8_t v) { return v == 0; })) {
                         return CaptureRegionGDI(x, y, width, height, filename);
                }
 
