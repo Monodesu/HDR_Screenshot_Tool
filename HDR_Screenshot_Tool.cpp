@@ -53,6 +53,8 @@ struct Config {
     std::string savePath = "Screenshots";
     bool autoStart = false;
     bool saveToFile = true;
+    float hdrExposure = 1.0f;
+    float hdrWhitePoint = 1.0f;
 };
 
 // HDR截图类
@@ -64,6 +66,14 @@ private:
     ComPtr<IDXGIOutput6> output6;
     int screenWidth = 0;
     int screenHeight = 0;
+    bool isHDREnabled = false;
+
+    // HDR元数据结构
+    struct HDRMetadata {
+        float maxLuminance = 1000.0f;
+        float minLuminance = 0.1f;
+        float maxContentLightLevel = 1000.0f;
+    };
 
 public:
     bool Initialize() {
@@ -94,6 +104,9 @@ public:
         output6->GetDesc(&outputDesc);
         screenWidth = outputDesc.DesktopCoordinates.right - outputDesc.DesktopCoordinates.left;
         screenHeight = outputDesc.DesktopCoordinates.bottom - outputDesc.DesktopCoordinates.top;
+
+        // 检测HDR状态
+        DetectHDRStatus();
 
         hr = output6->DuplicateOutput(d3dDevice.Get(), &deskDupl);
         return SUCCEEDED(hr);
@@ -161,17 +174,61 @@ public:
     }
 
 private:
+    void DetectHDRStatus() {
+        // 检测显示器是否支持HDR并已启用
+        DXGI_OUTPUT_DESC1 outputDesc1;
+        if (output6) {
+            ComPtr<IDXGIOutput6> output6Temp;
+            if (SUCCEEDED(output6.As(&output6Temp))) {
+                if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
+                    // 检查颜色空间和HDR能力
+                    isHDREnabled = (outputDesc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) ||
+                        (outputDesc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                }
+            }
+        }
+    }
+
+    HDRMetadata GetDisplayHDRMetadata() {
+        HDRMetadata metadata;
+
+        if (output6) {
+            ComPtr<IDXGIOutput6> output6Temp;
+            if (SUCCEEDED(output6.As(&output6Temp))) {
+                DXGI_OUTPUT_DESC1 outputDesc1;
+                if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
+                    metadata.maxLuminance = outputDesc1.MaxLuminance;
+                    metadata.minLuminance = outputDesc1.MinLuminance;
+                    metadata.maxContentLightLevel = outputDesc1.MaxFullFrameLuminance;
+                }
+            }
+        }
+
+        return metadata;
+    }
+
     bool ProcessAndSave(uint8_t* data, int width, int height, int pitch,
         DXGI_FORMAT format, const std::string& filename) {
 
         std::vector<uint8_t> rgbBuffer(width * height * 3);
 
+        // 根据格式和HDR状态处理数据
         switch (format) {
         case DXGI_FORMAT_R16G16B16A16_FLOAT:
-            ProcessHDR16Float(data, rgbBuffer.data(), width, height, pitch);
+            if (isHDREnabled) {
+                ProcessHDR16Float(data, rgbBuffer.data(), width, height, pitch);
+            }
+            else {
+                ProcessSDR16Float(data, rgbBuffer.data(), width, height, pitch);
+            }
             break;
         case DXGI_FORMAT_R10G10B10A2_UNORM:
-            ProcessHDR10(data, rgbBuffer.data(), width, height, pitch);
+            if (isHDREnabled) {
+                ProcessHDR10(data, rgbBuffer.data(), width, height, pitch);
+            }
+            else {
+                ProcessSDR10(data, rgbBuffer.data(), width, height, pitch);
+            }
             break;
         default:
             ProcessSDR(data, rgbBuffer.data(), width, height, pitch);
@@ -191,6 +248,8 @@ private:
     }
 
     void ProcessHDR16Float(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
+        HDRMetadata hdrMeta = GetDisplayHDRMetadata();
+
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = reinterpret_cast<uint16_t*>(src + y * pitch);
             auto* dstRow = dst + y * width * 3;
@@ -200,24 +259,34 @@ private:
                 float g = HalfToFloat(srcRow[x * 4 + 1]);
                 float b = HalfToFloat(srcRow[x * 4 + 2]);
 
+                // 归一化到0-1范围
+                r = std::clamp(r / hdrMeta.maxLuminance, 0.0f, 1.0f);
+                g = std::clamp(g / hdrMeta.maxLuminance, 0.0f, 1.0f);
+                b = std::clamp(b / hdrMeta.maxLuminance, 0.0f, 1.0f);
+
+                // Rec.2020 到 sRGB 色域转换
                 Rec2020ToSRGB(r, g, b);
 
-                r = ACESFilm(r);
-                g = ACESFilm(g);
-                b = ACESFilm(b);
+                // 色调映射
+                r = ImprovedToneMapping(r);
+                g = ImprovedToneMapping(g);
+                b = ImprovedToneMapping(b);
 
-                r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
-                g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
-                b = GammaCorrect(std::clamp(b, 0.0f, 1.0f));
+                // sRGB伽马校正
+                r = LinearToSRGB(std::clamp(r, 0.0f, 1.0f));
+                g = LinearToSRGB(std::clamp(g, 0.0f, 1.0f));
+                b = LinearToSRGB(std::clamp(b, 0.0f, 1.0f));
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255);
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
             }
         }
     }
 
     void ProcessHDR10(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
+        HDRMetadata hdrMeta = GetDisplayHDRMetadata();
+
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = reinterpret_cast<uint32_t*>(src + y * pitch);
             auto* dstRow = dst + y * width * 3;
@@ -228,23 +297,82 @@ private:
                 uint32_t g10 = (pixel >> 10) & 0x3FF;
                 uint32_t b10 = pixel & 0x3FF;
 
-                float r = PQToLinear(static_cast<float>(r10) / 1023.0f) / 1000.0f;
-                float g = PQToLinear(static_cast<float>(g10) / 1023.0f) / 1000.0f;
-                float b = PQToLinear(static_cast<float>(b10) / 1023.0f) / 1000.0f;
+                // PQ解码
+                float r = PQToLinear(static_cast<float>(r10) / 1023.0f);
+                float g = PQToLinear(static_cast<float>(g10) / 1023.0f);
+                float b = PQToLinear(static_cast<float>(b10) / 1023.0f);
 
+                // 归一化到显示器范围
+                r = std::clamp(r / hdrMeta.maxLuminance, 0.0f, 1.0f);
+                g = std::clamp(g / hdrMeta.maxLuminance, 0.0f, 1.0f);
+                b = std::clamp(b / hdrMeta.maxLuminance, 0.0f, 1.0f);
+
+                // Rec.2020 到 sRGB 色域转换
                 Rec2020ToSRGB(r, g, b);
 
-                r = ACESFilm(r);
-                g = ACESFilm(g);
-                b = ACESFilm(b);
+                // 色调映射
+                r = ImprovedToneMapping(r);
+                g = ImprovedToneMapping(g);
+                b = ImprovedToneMapping(b);
 
-                r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
-                g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
-                b = GammaCorrect(std::clamp(b, 0.0f, 1.0f));
+                // sRGB伽马校正
+                r = LinearToSRGB(std::clamp(r, 0.0f, 1.0f));
+                g = LinearToSRGB(std::clamp(g, 0.0f, 1.0f));
+                b = LinearToSRGB(std::clamp(b, 0.0f, 1.0f));
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255);
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+            }
+        }
+    }
+
+    void ProcessSDR16Float(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
+        for (int y : std::views::iota(0, height)) {
+            auto* srcRow = reinterpret_cast<uint16_t*>(src + y * pitch);
+            auto* dstRow = dst + y * width * 3;
+
+            for (int x : std::views::iota(0, width)) {
+                float r = HalfToFloat(srcRow[x * 4 + 0]);
+                float g = HalfToFloat(srcRow[x * 4 + 1]);
+                float b = HalfToFloat(srcRow[x * 4 + 2]);
+
+                // SDR模式下直接钳制到0-1
+                r = std::clamp(r, 0.0f, 1.0f);
+                g = std::clamp(g, 0.0f, 1.0f);
+                b = std::clamp(b, 0.0f, 1.0f);
+
+                // 应用伽马校正
+                r = LinearToSRGB(r);
+                g = LinearToSRGB(g);
+                b = LinearToSRGB(b);
+
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+            }
+        }
+    }
+
+    void ProcessSDR10(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
+        for (int y : std::views::iota(0, height)) {
+            auto* srcRow = reinterpret_cast<uint32_t*>(src + y * pitch);
+            auto* dstRow = dst + y * width * 3;
+
+            for (int x : std::views::iota(0, width)) {
+                uint32_t pixel = srcRow[x];
+                uint32_t r10 = (pixel >> 20) & 0x3FF;
+                uint32_t g10 = (pixel >> 10) & 0x3FF;
+                uint32_t b10 = pixel & 0x3FF;
+
+                // SDR模式下简单缩放
+                float r = static_cast<float>(r10) / 1023.0f;
+                float g = static_cast<float>(g10) / 1023.0f;
+                float b = static_cast<float>(b10) / 1023.0f;
+
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
             }
         }
     }
@@ -262,37 +390,54 @@ private:
         }
     }
 
-    static constexpr float ACESFilm(float x) noexcept {
-        constexpr float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
-        return std::max(0.0f, (x * (a * x + b)) / (x * (c * x + d) + e));
+    static constexpr float ImprovedToneMapping(float x) noexcept {
+        // Reinhard扩展色调映射，比ACES更温和
+        constexpr float whitePoint = 1.0f;
+        constexpr float exposure = 1.0f;
+
+        x *= exposure;
+        return (x * (1.0f + x / (whitePoint * whitePoint))) / (1.0f + x);
     }
 
-    static float GammaCorrect(float x) noexcept {
-        return std::pow(x, 1.0f / 2.2f);
+    static float LinearToSRGB(float linear) noexcept {
+        if (linear <= 0.0031308f) {
+            return 12.92f * linear;
+        }
+        else {
+            return 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
+        }
     }
 
     static void Rec2020ToSRGB(float& r, float& g, float& b) noexcept {
-        float r2 = 1.66032f * r - 0.58757f * g - 0.07291f * b;
-        float g2 = -0.12441f * r + 1.13280f * g - 0.00835f * b;
-        float b2 = -0.01811f * r - 0.10060f * g + 1.11877f * b;
-        r = r2;
-        g = g2;
-        b = b2;
+        // 使用Bradford色度适应的精确转换矩阵
+        float r2 = 1.7166511f * r - 0.3556708f * g - 0.2533663f * b;
+        float g2 = -0.6666844f * r + 1.6164812f * g + 0.0157685f * b;
+        float b2 = 0.0176399f * r - 0.0427706f * g + 0.9421031f * b;
+
+        r = std::clamp(r2, 0.0f, 1.0f);
+        g = std::clamp(g2, 0.0f, 1.0f);
+        b = std::clamp(b2, 0.0f, 1.0f);
     }
 
     static float PQToLinear(float pq) noexcept {
-        // ST2084 EOTF from normalized PQ value to absolute nits
-        constexpr float m1 = 0.1593017578125f;  // 2610/16384
-        constexpr float m2 = 78.84375f;         // 2523/32
-        constexpr float c1 = 0.8359375f;        // 3424/4096
-        constexpr float c2 = 18.8515625f;       // 2413/128
-        constexpr float c3 = 18.6875f;          // 2392/128
+        // ST2084 EOTF - 更精确的实现
+        constexpr float m1 = 2610.0f / 16384.0f;
+        constexpr float m2 = 2523.0f / 4096.0f * 128.0f;
+        constexpr float c1 = 3424.0f / 4096.0f;
+        constexpr float c2 = 2413.0f / 4096.0f * 32.0f;
+        constexpr float c3 = 2392.0f / 4096.0f * 32.0f;
 
         pq = std::clamp(pq, 0.0f, 1.0f);
+
+        if (pq == 0.0f) return 0.0f;
+
         float p = std::pow(pq, 1.0f / m2);
         float num = std::max(p - c1, 0.0f);
         float den = c2 - c3 * p;
-        return std::pow(num / den, 1.0f / m1); // result in nits (0-10000)
+
+        if (den <= 0.0f) return 0.0f;
+
+        return std::pow(num / den, 1.0f / m1) * 10000.0f;
     }
 
     static constexpr float HalfToFloat(uint16_t half) noexcept {
@@ -346,58 +491,59 @@ private:
     }
 
     bool SaveToClipboard(std::span<const uint8_t> data, int width, int height) {
+        if (!OpenClipboard(nullptr)) return false;
 
-        // 创建DIB数据
-        int imageSize = width * height * 3;
-        int dibSize = sizeof(BITMAPINFOHEADER) + imageSize;
+        auto clipboardGuard = [](void*) { CloseClipboard(); };
+        std::unique_ptr<void, decltype(clipboardGuard)> guard(reinterpret_cast<void*>(1), clipboardGuard);
 
-        auto hDib = GlobalAlloc(GMEM_MOVEABLE, dibSize);
+        EmptyClipboard();
+
+        // 计算位图数据大小
+        int rowSize = ((width * 24 + 31) / 32) * 4; // 4字节对齐
+        int imageSize = rowSize * height;
+        int totalSize = sizeof(BITMAPINFOHEADER) + imageSize;
+
+        auto hDib = GlobalAlloc(GMEM_MOVEABLE, totalSize);
         if (!hDib) return false;
 
-        auto dibGuard = [hDib](void*) { GlobalFree(hDib); };
-        std::unique_ptr<void, decltype(dibGuard)> guard(reinterpret_cast<void*>(1), dibGuard);
-
         auto* bih = static_cast<BITMAPINFOHEADER*>(GlobalLock(hDib));
-        if (!bih) return false;
-
-        auto unlockGuard = [hDib](void*) { GlobalUnlock(hDib); };
-        std::unique_ptr<void, decltype(unlockGuard)> lockGuard(reinterpret_cast<void*>(1), unlockGuard);
+        if (!bih) {
+            GlobalFree(hDib);
+            return false;
+        }
 
         // 填充位图信息头
         *bih = BITMAPINFOHEADER{
             .biSize = sizeof(BITMAPINFOHEADER),
             .biWidth = width,
-            .biHeight = -height, // 负数表示从上到下
+            .biHeight = height, // 正数表示从下到上
             .biPlanes = 1,
             .biBitCount = 24,
             .biCompression = BI_RGB,
             .biSizeImage = static_cast<DWORD>(imageSize)
         };
 
-        // 复制图像数据（RGB转BGR）
+        // 复制图像数据（需要垂直翻转，RGB转BGR）
         auto* dibData = reinterpret_cast<uint8_t*>(bih + 1);
-        for (int y : std::views::iota(0, height)) {
-            for (int x : std::views::iota(0, width)) {
-                int srcIdx = (y * width + x) * 3;
-                int dstIdx = (y * width + x) * 3;
-                dibData[dstIdx + 0] = data[srcIdx + 2]; // B
-                dibData[dstIdx + 1] = data[srcIdx + 1]; // G
-                dibData[dstIdx + 2] = data[srcIdx + 0]; // R
+        for (int y = 0; y < height; ++y) {
+            auto* dstRow = dibData + (height - 1 - y) * rowSize;
+            auto* srcRow = data.data() + y * width * 3;
+            for (int x = 0; x < width; ++x) {
+                dstRow[x * 3 + 0] = srcRow[x * 3 + 2]; // B
+                dstRow[x * 3 + 1] = srcRow[x * 3 + 1]; // G
+                dstRow[x * 3 + 2] = srcRow[x * 3 + 0]; // R
             }
         }
 
-        lockGuard.reset();
+        GlobalUnlock(hDib);
 
-        // 打开剪贴板并设置数据
-        if (OpenClipboard(nullptr)) {
-            EmptyClipboard();
-            SetClipboardData(CF_DIB, hDib);
-            CloseClipboard();
-            guard.release(); // 成功时不释放内存
-            return true;
+        if (SetClipboardData(CF_DIB, hDib)) {
+            return true; // 成功时不释放内存，系统会管理
         }
-
-        return false;
+        else {
+            GlobalFree(hDib);
+            return false;
+        }
     }
 
     static bool GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
@@ -421,7 +567,7 @@ private:
     }
 };
 
-// 区域选择覆盖窗口
+// 改进的区域选择覆盖窗口
 class SelectionOverlay {
 private:
     HWND hwnd = nullptr;
@@ -432,6 +578,9 @@ private:
     bool notifyHide = false;
     bool isSelecting = false;
     POINT startPoint{}, endPoint{};
+    HDC memDC = nullptr;
+    HBITMAP memBitmap = nullptr;
+    HBITMAP oldBitmap = nullptr;
 
 public:
     RECT selectedRect{};
@@ -448,14 +597,24 @@ public:
 
         RegisterClass(&wc);
 
+        int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+        int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+
         hwnd = CreateWindowEx(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
             L"SelectionOverlay", L"",
             WS_POPUP,
-            0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+            0, 0, screenWidth, screenHeight,
             nullptr, nullptr, GetModuleHandle(nullptr), this);
 
         if (!hwnd) return false;
+
+        // 创建内存DC和位图以避免闪烁
+        HDC hdc = GetDC(hwnd);
+        memDC = CreateCompatibleDC(hdc);
+        memBitmap = CreateCompatibleBitmap(hdc, screenWidth, screenHeight);
+        oldBitmap = static_cast<HBITMAP>(SelectObject(memDC, memBitmap));
+        ReleaseDC(hwnd, hdc);
 
         ShowWindow(hwnd, SW_HIDE);
         SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
@@ -489,6 +648,11 @@ public:
     }
 
     void Destroy() {
+        if (memDC) {
+            SelectObject(memDC, oldBitmap);
+            DeleteObject(memBitmap);
+            DeleteDC(memDC);
+        }
         if (hwnd) {
             DestroyWindow(hwnd);
             hwnd = nullptr;
@@ -505,6 +669,8 @@ public:
             overlay->startPoint.x = GET_X_LPARAM(lParam);
             overlay->startPoint.y = GET_Y_LPARAM(lParam);
             overlay->endPoint = overlay->startPoint;
+            SetCapture(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
             break;
 
         case WM_RBUTTONDOWN:
@@ -522,6 +688,7 @@ public:
         case WM_LBUTTONUP:
             if (overlay->isSelecting) {
                 overlay->isSelecting = false;
+                ReleaseCapture();
 
                 // 计算选择区域
                 auto [minX, maxX] = std::minmax(overlay->startPoint.x, overlay->endPoint.x);
@@ -548,27 +715,49 @@ public:
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
 
-            // 绘制半透明背景
             RECT clientRect;
             GetClientRect(hwnd, &clientRect);
 
+            // 使用内存DC绘制以避免闪烁
+            // 清除背景
             auto brush = CreateSolidBrush(RGB(0, 0, 0));
-            FillRect(hdc, &clientRect, brush);
+            FillRect(overlay->memDC, &clientRect, brush);
             DeleteObject(brush);
 
             // 绘制选择框
             if (overlay->isSelecting) {
                 auto pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-                auto oldPen = SelectObject(hdc, pen);
+                auto oldPen = SelectObject(overlay->memDC, pen);
 
                 auto [minX, maxX] = std::minmax(overlay->startPoint.x, overlay->endPoint.x);
                 auto [minY, maxY] = std::minmax(overlay->startPoint.y, overlay->endPoint.y);
 
-                Rectangle(hdc, minX, minY, maxX, maxY);
+                // 绘制选择框
+                SetBkMode(overlay->memDC, TRANSPARENT);
+                Rectangle(overlay->memDC, minX, minY, maxX, maxY);
 
-                SelectObject(hdc, oldPen);
+                // 绘制尺寸信息
+                auto oldTextColor = SetTextColor(overlay->memDC, RGB(255, 255, 255));
+                auto font = CreateFont(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                auto oldFont = SelectObject(overlay->memDC, font);
+
+                auto width = abs(maxX - minX);
+                auto height = abs(maxY - minY);
+                auto text = std::format(L"{}×{}", width, height);
+
+                TextOut(overlay->memDC, minX, minY - 25, text.c_str(), static_cast<int>(text.length()));
+
+                SelectObject(overlay->memDC, oldFont);
+                DeleteObject(font);
+                SetTextColor(overlay->memDC, oldTextColor);
+                SelectObject(overlay->memDC, oldPen);
                 DeleteObject(pen);
             }
+
+            // 将内存DC内容复制到窗口DC
+            BitBlt(hdc, 0, 0, clientRect.right, clientRect.bottom, overlay->memDC, 0, 0, SRCCOPY);
 
             EndPaint(hwnd, &ps);
             break;
@@ -581,7 +770,6 @@ public:
                 if (overlay->alpha >= 128) {
                     KillTimer(hwnd, 1);
                     overlay->fadingIn = false;
-                    SetCapture(hwnd);
                 }
             }
             else if (wParam == 2 && overlay->fadingOut) {
@@ -591,14 +779,14 @@ public:
                     KillTimer(hwnd, 2);
                     overlay->fadingOut = false;
                     ShowWindow(hwnd, SW_HIDE);
-                    ReleaseCapture();
                     auto style2 = GetWindowLong(hwnd, GWL_EXSTYLE);
                     SetWindowLong(hwnd, GWL_EXSTYLE, style2 | WS_EX_TRANSPARENT);
                     overlay->isSelecting = false;
                     if (overlay->notifyHide && overlay->messageWnd)
                         PostMessage(overlay->messageWnd, WM_USER + 100, 0, 0);
                     overlay->notifyHide = false;
-                } else {
+                }
+                else {
                     overlay->alpha = static_cast<BYTE>(overlay->alpha - 16);
                     SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
                 }
@@ -705,6 +893,8 @@ private:
                 else if (key == "SavePath") config.savePath = value;
                 else if (key == "AutoStart") config.autoStart = (value == "true");
                 else if (key == "SaveToFile") config.saveToFile = (value == "true");
+                else if (key == "HDRExposure") config.hdrExposure = std::stof(value);
+                else if (key == "HDRWhitePoint") config.hdrWhitePoint = std::stof(value);
             }
         }
     }
@@ -716,17 +906,22 @@ private:
             << std::format("FullscreenHotkey={}\n", config.fullscreenHotkey)
             << std::format("SavePath={}\n", config.savePath)
             << std::format("AutoStart={}\n", config.autoStart ? "true" : "false")
-            << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false");
+            << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false")
+            << std::format("HDRExposure={}\n", config.hdrExposure)
+            << std::format("HDRWhitePoint={}\n", config.hdrWhitePoint);
     }
 
     void CreateTrayIcon() {
+        // 创建一个简单的图标
+        auto icon = LoadIcon(nullptr, IDI_APPLICATION);
+
         nid = NOTIFYICONDATA{
             .cbSize = sizeof(nid),
             .hWnd = hwnd,
             .uID = IDI_TRAY_ICON,
             .uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP,
             .uCallbackMessage = WM_TRAY_ICON,
-            .hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_TRAY_ICON))
+            .hIcon = icon
         };
 
         wcscpy_s(nid.szTip, L"HDR Screenshot Tool");
@@ -833,11 +1028,15 @@ private:
         }
 
         if (capture->CaptureFullscreen(filename.value_or(""))) {
-            if (config.saveToFile) {
+            if (config.saveToFile && filename) {
                 ShowNotification(L"全屏截图已保存", std::wstring(filename->begin(), filename->end()));
-            } else {
+            }
+            else {
                 ShowNotification(L"全屏截图已复制到剪贴板");
             }
+        }
+        else {
+            ShowNotification(L"截图失败");
         }
     }
 
@@ -863,23 +1062,42 @@ private:
             }
 
             if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""))) {
-                if (config.saveToFile) {
+                if (config.saveToFile && filename) {
                     ShowNotification(L"区域截图已保存", std::wstring(filename->begin(), filename->end()));
-                } else {
+                }
+                else {
                     ShowNotification(L"区域截图已复制到剪贴板");
                 }
+            }
+            else {
+                ShowNotification(L"截图失败");
             }
         }
     }
 
     void ShowNotification(const std::wstring& message,
         const std::optional<std::wstring>& path = std::nullopt) {
+
+        // 确保托盘图标可以显示通知
         nid.uFlags = NIF_INFO;
+        nid.dwInfoFlags = NIIF_INFO;
+
         std::wstring info = message;
-        if (path) info += L"\n" + *path;
+        if (path && path->length() < 200) { // 避免路径过长
+            info += L"\n" + *path;
+        }
+
+        // 确保消息不会太长
+        if (info.length() > 255) {
+            info = info.substr(0, 252) + L"...";
+        }
+
         wcsncpy_s(nid.szInfo, info.c_str(), _TRUNCATE);
         wcscpy_s(nid.szInfoTitle, L"HDR Screenshot Tool");
         Shell_NotifyIcon(NIM_MODIFY, &nid);
+
+        // 重置标志
+        nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     }
 
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
