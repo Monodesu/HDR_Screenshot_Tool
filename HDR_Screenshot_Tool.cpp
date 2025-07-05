@@ -67,12 +67,31 @@ struct Config {
 // HDR截图类
 class HDRScreenCapture {
 private:
+        bool InitMonitor(MonitorInfo& info) {
+                DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                HRESULT hr = info.output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &info.dupl);
+                if (FAILED(hr)) {
+                        hr = info.output6->DuplicateOutput(d3dDevice.Get(), &info.dupl);
+                }
+                if (FAILED(hr)) return false;
+
+                DXGI_OUTDUPL_DESC dd{};
+                info.dupl->GetDesc(&dd);
+                info.rotation = dd.Rotation;
+                info.width = dd.ModeDesc.Width;
+                info.height = dd.ModeDesc.Height;
+
+                return true;
+        }
 	ComPtr<ID3D11Device> d3dDevice;
 	ComPtr<ID3D11DeviceContext> d3dContext;
         struct MonitorInfo {
                 ComPtr<IDXGIOutput6> output6;
                 ComPtr<IDXGIOutputDuplication> dupl;
                 RECT desktopRect{};
+                UINT width = 0;
+                UINT height = 0;
+                DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
         };
         std::vector<MonitorInfo> monitors;
         int virtualLeft = 0;
@@ -129,12 +148,7 @@ public:
                         virtualRect.right = std::max(virtualRect.right, desc.DesktopCoordinates.right);
                         virtualRect.bottom = std::max(virtualRect.bottom, desc.DesktopCoordinates.bottom);
 
-                        DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                        hr = info.output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &info.dupl);
-                        if (FAILED(hr)) {
-                                hr = info.output6->DuplicateOutput(d3dDevice.Get(), &info.dupl);
-                        }
-                        if (SUCCEEDED(hr)) {
+                        if (InitMonitor(info)) {
                                 monitors.push_back(std::move(info));
                         }
 
@@ -157,9 +171,9 @@ public:
         bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
                 RECT regionRect{ x, y, x + width, y + height };
 
-                ComPtr<ID3D11Texture2D> regionTexture;
-                DXGI_FORMAT format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                bool created = false;
+                DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+                UINT bpp = 0;
+                std::vector<uint8_t> buffer;
 
                 for (auto& m : monitors) {
                         RECT inter{};
@@ -168,59 +182,83 @@ public:
                         ComPtr<IDXGIResource> resource;
                         DXGI_OUTDUPL_FRAME_INFO frameInfo;
                         HRESULT hr = m.dupl->AcquireNextFrame(1000, &frameInfo, &resource);
+                        if (FAILED(hr)) {
+                                if (hr == DXGI_ERROR_ACCESS_LOST && InitMonitor(m)) {
+                                        hr = m.dupl->AcquireNextFrame(1000, &frameInfo, &resource);
+                                }
+                        }
                         if (FAILED(hr)) continue;
 
                         auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
                         std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
 
                         ComPtr<ID3D11Texture2D> texture;
-                        hr = resource.As(&texture);
-                        if (FAILED(hr)) continue;
+                        if (FAILED(resource.As(&texture))) continue;
 
-                        D3D11_TEXTURE2D_DESC desc;
+                        D3D11_TEXTURE2D_DESC desc{};
                         texture->GetDesc(&desc);
-                        format = desc.Format;
-
-                        if (!created) {
-                                D3D11_TEXTURE2D_DESC regionDesc = desc;
-                                regionDesc.Width = width;
-                                regionDesc.Height = height;
-                                regionDesc.Usage = D3D11_USAGE_STAGING;
-                                regionDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                                regionDesc.BindFlags = 0;
-                                regionDesc.MiscFlags = 0;
-                                if (FAILED(d3dDevice->CreateTexture2D(&regionDesc, nullptr, &regionTexture))) return false;
-                                created = true;
+                        if (format == DXGI_FORMAT_UNKNOWN) {
+                                format = desc.Format;
+                                bpp = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+                                buffer.resize(width * height * bpp);
                         }
 
-                        D3D11_BOX srcBox{};
-                        srcBox.left = inter.left - m.desktopRect.left;
-                        srcBox.top = inter.top - m.desktopRect.top;
-                        srcBox.right = srcBox.left + (inter.right - inter.left);
-                        srcBox.bottom = srcBox.top + (inter.bottom - inter.top);
-                        srcBox.front = 0;
-                        srcBox.back = 1;
+                        D3D11_TEXTURE2D_DESC stagingDesc = desc;
+                        stagingDesc.Usage = D3D11_USAGE_STAGING;
+                        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                        stagingDesc.BindFlags = 0;
+                        stagingDesc.MiscFlags = 0;
+                        ComPtr<ID3D11Texture2D> staging;
+                        if (FAILED(d3dDevice->CreateTexture2D(&stagingDesc, nullptr, &staging))) continue;
+                        d3dContext->CopyResource(staging.Get(), texture.Get());
 
-                        UINT destX = inter.left - x;
-                        UINT destY = inter.top - y;
+                        D3D11_MAPPED_SUBRESOURCE mapped{};
+                        if (FAILED(d3dContext->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) continue;
 
-                        d3dContext->CopySubresourceRegion(
-                                regionTexture.Get(), 0, destX, destY, 0,
-                                texture.Get(), 0, &srcBox);
+                        auto unmap = [&](void*) { d3dContext->Unmap(staging.Get(), 0); };
+                        std::unique_ptr<void, decltype(unmap)> mapGuard(reinterpret_cast<void*>(1), unmap);
+
+                        int destX = inter.left - x;
+                        int destY = inter.top - y;
+                        int rw = inter.right - inter.left;
+                        int rh = inter.bottom - inter.top;
+
+                        int rx0 = inter.left - m.desktopRect.left;
+                        int ry0 = inter.top - m.desktopRect.top;
+
+                        for (int row = 0; row < rh; ++row) {
+                                for (int col = 0; col < rw; ++col) {
+                                        int rx = rx0 + col;
+                                        int ry = ry0 + row;
+
+                                        int u = rx, v = ry;
+                                        switch (m.rotation) {
+                                        case DXGI_MODE_ROTATION_ROTATE90:
+                                                u = ry;
+                                                v = static_cast<int>(m.width) - rx - 1;
+                                                break;
+                                        case DXGI_MODE_ROTATION_ROTATE180:
+                                                u = static_cast<int>(m.width) - rx - 1;
+                                                v = static_cast<int>(m.height) - ry - 1;
+                                                break;
+                                        case DXGI_MODE_ROTATION_ROTATE270:
+                                                u = static_cast<int>(m.height) - ry - 1;
+                                                v = rx;
+                                                break;
+                                        default:
+                                                break;
+                                        }
+
+                                        const uint8_t* src = static_cast<const uint8_t*>(mapped.pData) + v * mapped.RowPitch + u * bpp;
+                                        uint8_t* dst = buffer.data() + ((destY + row) * width + destX + col) * bpp;
+                                        memcpy(dst, src, bpp);
+                                }
+                        }
                 }
 
-                if (!created) return false;
+                if (buffer.empty()) return false;
 
-                D3D11_MAPPED_SUBRESOURCE mapped;
-                HRESULT hr = d3dContext->Map(regionTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-                if (FAILED(hr)) return false;
-
-                auto unmapGuard = [&](void*) { d3dContext->Unmap(regionTexture.Get(), 0); };
-                std::unique_ptr<void, decltype(unmapGuard)> mapGuard(reinterpret_cast<void*>(1), unmapGuard);
-
-                return ProcessAndSave(
-                        static_cast<uint8_t*>(mapped.pData), width, height,
-                        mapped.RowPitch, format, filename);
+                return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
         }
 
         bool CaptureFullscreen(const std::string& filename = "") {
