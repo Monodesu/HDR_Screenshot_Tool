@@ -326,34 +326,30 @@ private:
             }
         }
 
+        float exposure = GetHDRExposure();
+
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = reinterpret_cast<uint16_t*>(src + y * pitch);
             auto* dstRow = dst + y * width * 3;
 
             for (int x : std::views::iota(0, width)) {
-                float r = HalfToFloat(srcRow[x * 4 + 0]);
-                float g = HalfToFloat(srcRow[x * 4 + 1]);
-                float b = HalfToFloat(srcRow[x * 4 + 2]);
+                float r = HalfToFloat(srcRow[x * 4 + 0]) * exposure;
+                float g = HalfToFloat(srcRow[x * 4 + 1]) * exposure;
+                float b = HalfToFloat(srcRow[x * 4 + 2]) * exposure;
 
+                // ACES filmic色调映射
+                r = ACESFilm(r);
+                g = ACESFilm(g);
+                b = ACESFilm(b);
 
-                // 智能处理：根据当前像素亮度调整曝光并避免过曝
-                float maxChannel = std::max({ r, g, b });
-                float scale = GetHDRExposure();
-                if (maxChannel > 1.0f) {
-                    scale = std::min(scale, 1.0f / maxChannel);
-                }
-                r = std::clamp(r * scale, 0.0f, 1.0f);
-                g = std::clamp(g * scale, 0.0f, 1.0f);
-                b = std::clamp(b * scale, 0.0f, 1.0f);
+                // sRGB伽马校正
+                r = LinearToSRGB(r);
+                g = LinearToSRGB(g);
+                b = LinearToSRGB(b);
 
-                // 跳过伽马校正看看是否有影响
-                // r = LinearToSRGB(r);
-                // g = LinearToSRGB(g);
-                // b = LinearToSRGB(b);
-
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255.0f + 0.5f);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255.0f + 0.5f);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255.0f + 0.5f);
             }
         }
     }
@@ -514,13 +510,13 @@ private:
         return x / (1.0f + x * 0.1f);
     }
 
-    static constexpr float ImprovedToneMapping(float x) noexcept {
-        // Reinhard扩展色调映射，比ACES更温和
-        constexpr float whitePoint = 1.0f;
-        constexpr float exposure = 1.0f;
-
-        x *= exposure;
-        return (x * (1.0f + x / (whitePoint * whitePoint))) / (1.0f + x);
+    static constexpr float ACESFilm(float x) noexcept {
+        const float a = 2.51f;
+        const float b = 0.03f;
+        const float c = 2.43f;
+        const float d = 0.59f;
+        const float e = 0.14f;
+        return std::clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0f, 1.0f);
     }
 
     static float LinearToSRGB(float linear) noexcept {
