@@ -1078,8 +1078,8 @@ class ScreenshotApp {
 private:
 	HWND hwnd = nullptr;
 	NOTIFYICONDATA nid{};
-	std::unique_ptr<HDRScreenCapture> capture;
-	std::unique_ptr<SelectionOverlay> overlay;
+        // 不在此处持有 HDRScreenCapture，对象将在每次截图时临时创建
+        std::unique_ptr<SelectionOverlay> overlay;
 	Config config;
 
 public:
@@ -1106,13 +1106,7 @@ public:
 		// 加载配置
 		LoadConfig();
 
-		// 初始化HDR截图
-		capture = std::make_unique<HDRScreenCapture>();
-		capture->SetConfig(&config); // 传递配置
-		if (!capture->Initialize()) {
-			MessageBox(nullptr, L"Failed to initialize HDR capture", L"Error", MB_OK);
-			return false;
-		}
+                // HDRScreenCapture 不再在此持久化创建，改为截图时临时初始化
 
 		// 创建选择覆盖窗口
 		overlay = std::make_unique<SelectionOverlay>();
@@ -1379,9 +1373,16 @@ private:
                                         tm.tm_hour, tm.tm_min, tm.tm_sec);
                         }
 
+                        HDRScreenCapture cap;
+                        cap.SetConfig(&config);
+                        if (!cap.Initialize()) {
+                                ShowNotification(L"截图失败");
+                                return;
+                        }
+
                         int w = full.right - full.left;
                         int h = full.bottom - full.top;
-                        if (TryCapture([&] { return capture->CaptureRegion(full.left, full.top, w, h, filename.value_or("")); })) {
+                        if (TryCapture([&] { return cap.CaptureRegion(full.left, full.top, w, h, filename.value_or("")); })) {
                                 if (config.saveToFile && filename) {
                                         ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                                 } else {
@@ -1412,18 +1413,24 @@ private:
 		}
 
                 bool success = false;
+                HDRScreenCapture cap;
+                cap.SetConfig(&config);
+                if (!cap.Initialize()) {
+                        ShowNotification(L"截图失败");
+                        return;
+                }
                 if (config.fullscreenCurrentMonitor) {
                         POINT pt; GetCursorPos(&pt);
-                        for (const auto& m : capture->GetMonitors()) {
+                        for (const auto& m : cap.GetMonitors()) {
                                 if (PtInRect(&m.desktopRect, pt)) {
                                         int w = m.desktopRect.right - m.desktopRect.left;
                                         int h = m.desktopRect.bottom - m.desktopRect.top;
-                                        success = TryCapture([&] { return capture->CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or("") ); });
+                                        success = TryCapture([&] { return cap.CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or("") ); });
                                         break;
                                 }
                         }
                 } else {
-                        success = TryCapture([&] { return capture->CaptureFullscreen(filename.value_or("")); });
+                        success = TryCapture([&] { return cap.CaptureFullscreen(filename.value_or("")); });
                 }
 
                 if (success) {
@@ -1460,9 +1467,17 @@ private:
 					tm.tm_hour, tm.tm_min, tm.tm_sec);
 			}
 
-                        int globalLeft = rect.left + capture->GetVirtualLeft();
-                        int globalTop = rect.top + capture->GetVirtualTop();
-                        if (TryCapture([&] { return capture->CaptureRegion(globalLeft, globalTop, width, height, filename.value_or("")); })) {
+                        int globalLeft = rect.left + GetSystemMetrics(SM_XVIRTUALSCREEN);
+                        int globalTop = rect.top + GetSystemMetrics(SM_YVIRTUALSCREEN);
+
+                        HDRScreenCapture cap;
+                        cap.SetConfig(&config);
+                        if (!cap.Initialize()) {
+                                ShowNotification(L"截图失败");
+                                return;
+                        }
+
+                        if (TryCapture([&] { return cap.CaptureRegion(globalLeft, globalTop, width, height, filename.value_or("")); })) {
                                 if (config.saveToFile && filename) {
                                         ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                                 }
@@ -1545,12 +1560,11 @@ private:
 
                 case WM_DISPLAYCHANGE:
                 case WM_DEVICECHANGE:
-                        app->capture->Reinitialize();
+                        // 截图时会重新初始化设备，此处无需处理
                         break;
 
                 case WM_POWERBROADCAST:
-                        if (wParam == PBT_APMRESUMESUSPEND || wParam == PBT_APMRESUMECRITICAL)
-                                app->capture->Reinitialize();
+                        // 休眠恢复后无需特别操作
                         break;
 
                 case WM_USER + 100: // 区域选择完成
