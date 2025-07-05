@@ -195,9 +195,9 @@ private:
             auto* dstRow = dst + y * width * 3;
 
             for (int x : std::views::iota(0, width)) {
-                float r = HalfToFloat(srcRow[x * 4 + 0]);
+                float b = HalfToFloat(srcRow[x * 4 + 0]);
                 float g = HalfToFloat(srcRow[x * 4 + 1]);
-                float b = HalfToFloat(srcRow[x * 4 + 2]);
+                float r = HalfToFloat(srcRow[x * 4 + 2]);
 
                 r = ACESFilm(r);
                 g = ACESFilm(g);
@@ -217,9 +217,9 @@ private:
 
             for (int x : std::views::iota(0, width)) {
                 uint32_t pixel = srcRow[x];
-                uint32_t r10 = (pixel >> 20) & 0x3FF;
+                uint32_t b10 = (pixel >> 20) & 0x3FF;
                 uint32_t g10 = (pixel >> 10) & 0x3FF;
-                uint32_t b10 = pixel & 0x3FF;
+                uint32_t r10 = pixel & 0x3FF;
 
                 float r = PQToLinear(r10 / 1023.0f);
                 float g = PQToLinear(g10 / 1023.0f);
@@ -411,13 +411,14 @@ public:
         hwnd = CreateWindowEx(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
             L"SelectionOverlay", L"",
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP,
             0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
             nullptr, nullptr, GetModuleHandle(nullptr), this);
 
         if (!hwnd) return false;
 
         SetLayeredWindowAttributes(hwnd, 0, 128, LWA_ALPHA);
+        ShowWindow(hwnd, SW_HIDE);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
         return true;
@@ -647,12 +648,18 @@ private:
     }
 
     void RegisterHotkeys() {
-        // 解析热键字符串并注册
+        UnregisterHotKey(hwnd, WM_HOTKEY_REGION);
+        UnregisterHotKey(hwnd, WM_HOTKEY_FULLSCREEN);
+
         if (auto [mod1, vk1] = ParseHotkey(config.regionHotkey); vk1 != 0) {
-            RegisterHotKey(hwnd, WM_HOTKEY_REGION, mod1, vk1);
+            if (!RegisterHotKey(hwnd, WM_HOTKEY_REGION, mod1, vk1)) {
+                MessageBox(hwnd, L"区域截图热键注册失败", L"Error", MB_OK);
+            }
         }
         if (auto [mod2, vk2] = ParseHotkey(config.fullscreenHotkey); vk2 != 0) {
-            RegisterHotKey(hwnd, WM_HOTKEY_FULLSCREEN, mod2, vk2);
+            if (!RegisterHotKey(hwnd, WM_HOTKEY_FULLSCREEN, mod2, vk2)) {
+                MessageBox(hwnd, L"全屏截图热键注册失败", L"Error", MB_OK);
+            }
         }
     }
 
@@ -746,8 +753,13 @@ private:
         }
 
         if (capture->CaptureFullscreen(filename.value_or(""))) {
-            ShowNotification(config.saveToFile ?
-                L"全屏截图已保存到文件和剪贴板" : L"全屏截图已保存到剪贴板");
+            if (config.saveToFile && filename) {
+                auto wpath = std::wstring(filename->begin(), filename->end());
+                auto msg = std::wstring(L"全屏截图已保存:\n") + wpath;
+                ShowNotification(msg.c_str());
+            } else {
+                ShowNotification(L"全屏截图已保存到剪贴板");
+            }
         }
     }
 
@@ -773,8 +785,13 @@ private:
             }
 
             if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""))) {
-                ShowNotification(config.saveToFile ?
-                    L"区域截图已保存到文件和剪贴板" : L"区域截图已保存到剪贴板");
+                if (config.saveToFile && filename) {
+                    auto wpath = std::wstring(filename->begin(), filename->end());
+                    auto msg = std::wstring(L"区域截图已保存:\n") + wpath;
+                    ShowNotification(msg.c_str());
+                } else {
+                    ShowNotification(L"区域截图已保存到剪贴板");
+                }
             }
         }
     }
