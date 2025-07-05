@@ -189,7 +189,7 @@ private:
             if (SUCCEEDED(output6.As(&output6Temp))) {
                 if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
                     // 输出调试信息
-                    std::ofstream debug("hdr_detection.txt");
+                    std::ofstream debug("debug.txt", std::ios::app);
                     debug << "Monitor Info:" << std::endl;
                     debug << "ColorSpace: " << static_cast<int>(outputDesc1.ColorSpace) << std::endl;
                     debug << "MaxLuminance: " << outputDesc1.MaxLuminance << std::endl;
@@ -225,7 +225,7 @@ private:
         // 如果无法获取信息，默认启用HDR处理
         if (!isHDREnabled) {
             isHDREnabled = true;
-            std::ofstream debug("hdr_detection.txt", std::ios::app);
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "Unable to obtain display information, HDR processing is enabled by default" << std::endl;
             debug.close();
         }
@@ -257,7 +257,7 @@ private:
         // 添加调试信息
         static bool debugOnce = true;
         if (debugOnce) {
-            std::ofstream debug("format_debug.txt");
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "DXGI Format: " << static_cast<int>(format) << std::endl;
             debug << "HDR Detected: " << (isHDREnabled ? "Yes" : "No") << std::endl;
             debug << "Handling branches: ";
@@ -335,7 +335,7 @@ private:
         // 添加调试输出
         static bool debugOnce = true;
         if (debugOnce) {
-            std::ofstream debug("process_debug.txt", std::ios::app);
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "ProcessHDR16Float called." << std::endl;
             debugOnce = false;
         }
@@ -344,7 +344,7 @@ private:
         if (GetDebugMode()) {
             static bool debugRawOnce = true;
             if (debugRawOnce) {
-                std::ofstream debug("hdr_raw_data.txt");
+                std::ofstream debug("debug.txt", std::ios::app);
                 debug << "HDR raw data analysis (first 100 pixels):\n";
                 auto* srcRow = reinterpret_cast<uint16_t*>(src);
                 for (int i = 0; i < 100 && i < width; ++i) {
@@ -435,7 +435,7 @@ private:
         // 添加调试输出
         static bool debugOnce = true;
         if (debugOnce) {
-            std::ofstream debug("process_debug.txt", std::ios::app);
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "调用了 ProcessSDR16Float" << std::endl;
             debugOnce = false;
         }
@@ -493,7 +493,7 @@ private:
         // 添加调试输出
         static bool debugOnce = true;
         if (debugOnce) {
-            std::ofstream debug("process_debug.txt", std::ios::app);
+            std::ofstream debug("debug.txt", std::ios::app);
             debug << "ProcessSDR (BGRA) called." << std::endl;
             debugOnce = false;
         }
