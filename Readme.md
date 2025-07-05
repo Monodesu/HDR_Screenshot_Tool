@@ -14,6 +14,7 @@
 - **剪贴板集成**: 截图自动复制到剪贴板
 - **文件保存**: 可选择同时保存到文件
 - **可视化选择**: 带有实时尺寸显示的选择框
+- **多显示器支持**: 可在多屏环境下截图
 
 ## 系统要求
 
@@ -54,6 +55,7 @@
 #### 区域截图
 - **默认热键**: `Ctrl + Alt + A`
 - 按下热键后屏幕会显示半透明覆盖层
+- 多显示器环境下会覆盖所有显示器
 - 按住鼠标左键拖拽选择区域
 - 释放鼠标完成截图
 - 按 `Esc` 或鼠标右键取消
@@ -61,6 +63,7 @@
 #### 全屏截图
 - **默认热键**: `Ctrl + Shift + Alt + A`
 - 按下热键立即截取整个屏幕
+- 可通过 `FullscreenCurrentMonitor` 选项仅截取指针所在显示器
 
 #### 系统托盘菜单
 右键点击托盘图标可以访问：
@@ -89,6 +92,7 @@ DebugMode=false
 ; HDR settings
 UseACESFilmToneMapping=false
 SDRBrightness=250.0
+FullscreenCurrentMonitor=false
 ```
 
 #### 配置说明
@@ -104,6 +108,7 @@ SDRBrightness=250.0
 | `DebugMode` | 调试模式 | `false` |
 | `UseACESFilmToneMapping` | 使用ACES色调映射 | `false` |
 | `SDRBrightness` | SDR目标亮度(nits) | `250.0` |
+| `FullscreenCurrentMonitor` | 全屏截图时仅截取指针所在显示器 | `false` |
 
 ### 热键格式
 

@@ -52,15 +52,16 @@ using namespace std::chrono;
 
 // 配置结构
 struct Config {
-	std::string regionHotkey = "ctrl+alt+a";
-	std::string fullscreenHotkey = "ctrl+shift+alt+a";
-	std::string savePath = "Screenshots";
-	bool autoStart = false;
-	bool saveToFile = true;
-	bool showNotification = true;       // 是否弹窗提示
-	bool debugMode = false; // 调试模式
-	bool useACESFilmToneMapping = false; // 使用ACES色调映射
-	float sdrBrightness = 250.0f;       // SDR目标亮度
+        std::string regionHotkey = "ctrl+alt+a";
+        std::string fullscreenHotkey = "ctrl+shift+alt+a";
+        std::string savePath = "Screenshots";
+        bool autoStart = false;
+        bool saveToFile = true;
+        bool showNotification = true;       // 是否弹窗提示
+        bool debugMode = false; // 调试模式
+        bool useACESFilmToneMapping = false; // 使用ACES色调映射
+        float sdrBrightness = 250.0f;       // SDR目标亮度
+        bool fullscreenCurrentMonitor = false; // 仅截取指针所在显示器
 };
 
 // HDR截图类
@@ -68,12 +69,18 @@ class HDRScreenCapture {
 private:
 	ComPtr<ID3D11Device> d3dDevice;
 	ComPtr<ID3D11DeviceContext> d3dContext;
-	ComPtr<IDXGIOutputDuplication> deskDupl;
-	ComPtr<IDXGIOutput6> output6;
-	int screenWidth = 0;
-	int screenHeight = 0;
-	bool isHDREnabled = false;
-	const Config* config = nullptr; // 添加配置引用
+        struct MonitorInfo {
+                ComPtr<IDXGIOutput6> output6;
+                ComPtr<IDXGIOutputDuplication> dupl;
+                RECT desktopRect{};
+        };
+        std::vector<MonitorInfo> monitors;
+        int virtualLeft = 0;
+        int virtualTop = 0;
+        int virtualWidth = 0;
+        int virtualHeight = 0;
+        bool isHDREnabled = false;
+        const Config* config = nullptr; // 添加配置引用
 
 	// HDR元数据结构
 	struct HDRMetadata {
@@ -83,8 +90,11 @@ private:
 	};
 
 public:
-	void SetConfig(const Config* cfg) { config = cfg; }
-	bool Initialize() {
+        void SetConfig(const Config* cfg) { config = cfg; }
+        const std::vector<MonitorInfo>& GetMonitors() const { return monitors; }
+        int GetVirtualLeft() const { return virtualLeft; }
+        int GetVirtualTop() const { return virtualTop; }
+        bool Initialize() {
 		D3D_FEATURE_LEVEL featureLevel;
 		HRESULT hr = D3D11CreateDevice(
 			nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
@@ -101,89 +111,121 @@ public:
 		hr = dxgiDevice->GetAdapter(&adapter);
 		if (FAILED(hr)) return false;
 
-		ComPtr<IDXGIOutput> output;
-		hr = adapter->EnumOutputs(0, &output);
-		if (FAILED(hr)) return false;
+                UINT i = 0;
+                RECT virtualRect{ INT_MAX, INT_MAX, INT_MIN, INT_MIN };
+                while (true) {
+                        ComPtr<IDXGIOutput> output;
+                        if (FAILED(adapter->EnumOutputs(i, &output))) break;
 
-		hr = output.As(&output6);
-		if (FAILED(hr)) return false;
+                        MonitorInfo info{};
+                        if (FAILED(output.As(&info.output6))) break;
 
-		DXGI_OUTPUT_DESC outputDesc;
-		output6->GetDesc(&outputDesc);
-		screenWidth = outputDesc.DesktopCoordinates.right - outputDesc.DesktopCoordinates.left;
-		screenHeight = outputDesc.DesktopCoordinates.bottom - outputDesc.DesktopCoordinates.top;
+                        DXGI_OUTPUT_DESC desc;
+                        info.output6->GetDesc(&desc);
+                        info.desktopRect = desc.DesktopCoordinates;
 
-		// 检测HDR状态
-		DetectHDRStatus();
+                        virtualRect.left = std::min(virtualRect.left, desc.DesktopCoordinates.left);
+                        virtualRect.top = std::min(virtualRect.top, desc.DesktopCoordinates.top);
+                        virtualRect.right = std::max(virtualRect.right, desc.DesktopCoordinates.right);
+                        virtualRect.bottom = std::max(virtualRect.bottom, desc.DesktopCoordinates.bottom);
 
-		DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		hr = output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &deskDupl);
-		if (FAILED(hr)) {
-			hr = output6->DuplicateOutput(d3dDevice.Get(), &deskDupl);
-		}
-		return SUCCEEDED(hr);
-	}
+                        DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                        hr = info.output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &info.dupl);
+                        if (FAILED(hr)) {
+                                hr = info.output6->DuplicateOutput(d3dDevice.Get(), &info.dupl);
+                        }
+                        if (SUCCEEDED(hr)) {
+                                monitors.push_back(std::move(info));
+                        }
 
-	bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
-		ComPtr<IDXGIResource> resource;
-		DXGI_OUTDUPL_FRAME_INFO frameInfo;
+                        ++i;
+                }
 
-		HRESULT hr = deskDupl->AcquireNextFrame(1000, &frameInfo, &resource);
-		if (FAILED(hr)) return false;
+                if (monitors.empty()) return false;
 
-		auto cleanup = [&](void*) { deskDupl->ReleaseFrame(); };
-		std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
+                virtualLeft = virtualRect.left;
+                virtualTop = virtualRect.top;
+                virtualWidth = virtualRect.right - virtualRect.left;
+                virtualHeight = virtualRect.bottom - virtualRect.top;
 
-		ComPtr<ID3D11Texture2D> texture;
-		hr = resource.As(&texture);
-		if (FAILED(hr)) return false;
+                // 检测HDR状态(基于首个显示器)
+                DetectHDRStatus();
 
-		D3D11_TEXTURE2D_DESC desc;
-		texture->GetDesc(&desc);
+                return true;
+        }
 
-		// 创建区域纹理
-		D3D11_TEXTURE2D_DESC regionDesc = desc;
-		regionDesc.Width = width;
-		regionDesc.Height = height;
-		regionDesc.Usage = D3D11_USAGE_STAGING;
-		regionDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		regionDesc.BindFlags = 0;
-		regionDesc.MiscFlags = 0;
+        bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
+                RECT regionRect{ x, y, x + width, y + height };
 
-		ComPtr<ID3D11Texture2D> regionTexture;
-		hr = d3dDevice->CreateTexture2D(&regionDesc, nullptr, &regionTexture);
-		if (FAILED(hr)) return false;
+                ComPtr<ID3D11Texture2D> regionTexture;
+                DXGI_FORMAT format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                bool created = false;
 
-		// 复制区域
-		D3D11_BOX srcBox{
-			.left = static_cast<UINT>(x),
-			.top = static_cast<UINT>(y),
-			.front = 0,
-			.right = static_cast<UINT>(x + width),
-			.bottom = static_cast<UINT>(y + height),
-			.back = 1
-		};
+                for (auto& m : monitors) {
+                        RECT inter{};
+                        if (!IntersectRect(&inter, &regionRect, &m.desktopRect)) continue;
 
-		d3dContext->CopySubresourceRegion(
-			regionTexture.Get(), 0, 0, 0, 0,
-			texture.Get(), 0, &srcBox);
+                        ComPtr<IDXGIResource> resource;
+                        DXGI_OUTDUPL_FRAME_INFO frameInfo;
+                        HRESULT hr = m.dupl->AcquireNextFrame(1000, &frameInfo, &resource);
+                        if (FAILED(hr)) continue;
 
-		// 映射并保存
-		D3D11_MAPPED_SUBRESOURCE mapped;
-		hr = d3dContext->Map(regionTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-		if (FAILED(hr)) return false;
+                        auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
+                        std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
 
-		auto unmapGuard = [&](void*) { d3dContext->Unmap(regionTexture.Get(), 0); };
-		std::unique_ptr<void, decltype(unmapGuard)> mapGuard(reinterpret_cast<void*>(1), unmapGuard);
+                        ComPtr<ID3D11Texture2D> texture;
+                        hr = resource.As(&texture);
+                        if (FAILED(hr)) continue;
 
-		return ProcessAndSave(
-			static_cast<uint8_t*>(mapped.pData), width, height,
-			mapped.RowPitch, desc.Format, filename);
-	}
+                        D3D11_TEXTURE2D_DESC desc;
+                        texture->GetDesc(&desc);
+                        format = desc.Format;
 
-	bool CaptureFullscreen(const std::string& filename = "") {
-		return CaptureRegion(0, 0, screenWidth, screenHeight, filename);
-	}
+                        if (!created) {
+                                D3D11_TEXTURE2D_DESC regionDesc = desc;
+                                regionDesc.Width = width;
+                                regionDesc.Height = height;
+                                regionDesc.Usage = D3D11_USAGE_STAGING;
+                                regionDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                                regionDesc.BindFlags = 0;
+                                regionDesc.MiscFlags = 0;
+                                if (FAILED(d3dDevice->CreateTexture2D(&regionDesc, nullptr, &regionTexture))) return false;
+                                created = true;
+                        }
+
+                        D3D11_BOX srcBox{};
+                        srcBox.left = inter.left - m.desktopRect.left;
+                        srcBox.top = inter.top - m.desktopRect.top;
+                        srcBox.right = srcBox.left + (inter.right - inter.left);
+                        srcBox.bottom = srcBox.top + (inter.bottom - inter.top);
+                        srcBox.front = 0;
+                        srcBox.back = 1;
+
+                        UINT destX = inter.left - x;
+                        UINT destY = inter.top - y;
+
+                        d3dContext->CopySubresourceRegion(
+                                regionTexture.Get(), 0, destX, destY, 0,
+                                texture.Get(), 0, &srcBox);
+                }
+
+                if (!created) return false;
+
+                D3D11_MAPPED_SUBRESOURCE mapped;
+                HRESULT hr = d3dContext->Map(regionTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+                if (FAILED(hr)) return false;
+
+                auto unmapGuard = [&](void*) { d3dContext->Unmap(regionTexture.Get(), 0); };
+                std::unique_ptr<void, decltype(unmapGuard)> mapGuard(reinterpret_cast<void*>(1), unmapGuard);
+
+                return ProcessAndSave(
+                        static_cast<uint8_t*>(mapped.pData), width, height,
+                        mapped.RowPitch, format, filename);
+        }
+
+        bool CaptureFullscreen(const std::string& filename = "") {
+                return CaptureRegion(virtualLeft, virtualTop, virtualWidth, virtualHeight, filename);
+        }
 
 private:
 	void DetectHDRStatus() {
@@ -191,9 +233,9 @@ private:
 		DXGI_OUTPUT_DESC1 outputDesc1;
 		isHDREnabled = false; // 默认为false
 
-		if (output6) {
-			ComPtr<IDXGIOutput6> output6Temp;
-			if (SUCCEEDED(output6.As(&output6Temp))) {
+                if (!monitors.empty()) {
+                        ComPtr<IDXGIOutput6> output6Temp;
+                        if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
 				if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
 					if (GetDebugMode()) {
 						std::ofstream debug("debug.txt", std::ios::app);
@@ -259,9 +301,9 @@ private:
 	HDRMetadata GetDisplayHDRMetadata() {
 		HDRMetadata metadata;
 
-		if (output6) {
-			ComPtr<IDXGIOutput6> output6Temp;
-			if (SUCCEEDED(output6.As(&output6Temp))) {
+                if (!monitors.empty()) {
+                        ComPtr<IDXGIOutput6> output6Temp;
+                        if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
 				DXGI_OUTPUT_DESC1 outputDesc1;
 				if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
 					metadata.maxLuminance = outputDesc1.MaxLuminance;
@@ -768,15 +810,17 @@ public:
 
 		RegisterClass(&wc);
 
-		int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-		int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+                int screenWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                int screenHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                int screenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                int screenY = GetSystemMetrics(SM_YVIRTUALSCREEN);
 
 		hwnd = CreateWindowEx(
 			WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
 			L"SelectionOverlay", L"",
 			WS_POPUP,
-			0, 0, screenWidth, screenHeight,
-			nullptr, nullptr, GetModuleHandle(nullptr), this);
+                        screenX, screenY, screenWidth, screenHeight,
+                        nullptr, nullptr, GetModuleHandle(nullptr), this);
 
 		if (!hwnd) return false;
 
@@ -1066,12 +1110,13 @@ private:
 				else if (key == "AutoStart") config.autoStart = (value == "true");
 				else if (key == "SaveToFile") config.saveToFile = (value == "true");
 				else if (key == "ShowNotification") config.showNotification = (value == "true");
-				else if (key == "DebugMode") config.debugMode = (value == "true");
-				else if (key == "UseACESFilmToneMapping") config.useACESFilmToneMapping = (value == "true");
-				else if (key == "SDRBrightness") config.sdrBrightness = std::stof(value);
-			}
-		}
-	}
+                                else if (key == "DebugMode") config.debugMode = (value == "true");
+                                else if (key == "UseACESFilmToneMapping") config.useACESFilmToneMapping = (value == "true");
+                                else if (key == "SDRBrightness") config.sdrBrightness = std::stof(value);
+                                else if (key == "FullscreenCurrentMonitor") config.fullscreenCurrentMonitor = (value == "true");
+                        }
+                }
+        }
 
 	void SaveConfig() {
 		std::ofstream file("config.ini");
@@ -1082,13 +1127,14 @@ private:
 			<< std::format("SavePath={}\n", config.savePath)
 			<< std::format("AutoStart={}\n", config.autoStart ? "true" : "false")
 			<< std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false")
-			<< std::format("ShowNotification={}\n", config.showNotification ? "true" : "false")
-			<< "\n; Debug settings\n"
-			<< std::format("DebugMode={}\n", config.debugMode ? "true" : "false")
-			<< "\n; HDR settings\n"
-			<< std::format("UseACESFilmToneMapping={}\n", config.useACESFilmToneMapping ? "true" : "false")
-			<< std::format("SDRBrightness={}\n", config.sdrBrightness);
-	}
+                        << std::format("ShowNotification={}\n", config.showNotification ? "true" : "false")
+                        << "\n; Debug settings\n"
+                        << std::format("DebugMode={}\n", config.debugMode ? "true" : "false")
+                        << "\n; HDR settings\n"
+                        << std::format("UseACESFilmToneMapping={}\n", config.useACESFilmToneMapping ? "true" : "false")
+                        << std::format("SDRBrightness={}\n", config.sdrBrightness)
+                        << std::format("\nFullscreenCurrentMonitor={}\n", config.fullscreenCurrentMonitor ? "true" : "false");
+        }
 
 	void CreateTrayIcon() {
 		// 创建一个简单的图标
@@ -1240,16 +1286,31 @@ private:
 				tm.tm_hour, tm.tm_min, tm.tm_sec);
 		}
 
-		if (capture->CaptureFullscreen(filename.value_or(""))) {
-			if (config.saveToFile && filename) {
-				ShowNotification(L"全屏截图已保存", std::wstring(filename->begin(), filename->end()));
-			}
-			else {
-				ShowNotification(L"全屏截图已复制到剪贴板");
-			}
-		}
-		else {
-			ShowNotification(L"截图失败");
+                bool success = false;
+                if (config.fullscreenCurrentMonitor) {
+                        POINT pt; GetCursorPos(&pt);
+                        for (const auto& m : capture->GetMonitors()) {
+                                if (PtInRect(&m.desktopRect, pt)) {
+                                        int w = m.desktopRect.right - m.desktopRect.left;
+                                        int h = m.desktopRect.bottom - m.desktopRect.top;
+                                        success = capture->CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or(""));
+                                        break;
+                                }
+                        }
+                } else {
+                        success = capture->CaptureFullscreen(filename.value_or(""));
+                }
+
+                if (success) {
+                        if (config.saveToFile && filename) {
+                                ShowNotification(L"全屏截图已保存", std::wstring(filename->begin(), filename->end()));
+                        }
+                        else {
+                                ShowNotification(L"全屏截图已复制到剪贴板");
+                        }
+                }
+                else {
+                        ShowNotification(L"截图失败");
 		}
 	}
 
@@ -1274,7 +1335,9 @@ private:
 					tm.tm_hour, tm.tm_min, tm.tm_sec);
 			}
 
-			if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""))) {
+                        int globalLeft = rect.left + capture->GetVirtualLeft();
+                        int globalTop = rect.top + capture->GetVirtualTop();
+                        if (capture->CaptureRegion(globalLeft, globalTop, width, height, filename.value_or(""))) {
 				if (config.saveToFile && filename) {
 					ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
 				}
