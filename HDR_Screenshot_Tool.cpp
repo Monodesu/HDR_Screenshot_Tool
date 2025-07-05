@@ -169,7 +169,10 @@ public:
                 return true;
         }
 
-        bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
+       bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
+               for (auto& m : monitors) {
+                       InitMonitor(m); // Always reinitialize duplication to avoid stale frames
+               }
                 RECT regionRect{ x, y, x + width, y + height };
 
                 DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
