@@ -222,9 +222,9 @@ private:
                 uint32_t g10 = (pixel >> 10) & 0x3FF;
                 uint32_t b10 = pixel & 0x3FF;
 
-                float r = static_cast<float>(r10) / 1023.0f;
-                float g = static_cast<float>(g10) / 1023.0f;
-                float b = static_cast<float>(b10) / 1023.0f;
+                float r = PQToLinear(static_cast<float>(r10) / 1023.0f);
+                float g = PQToLinear(static_cast<float>(g10) / 1023.0f);
+                float b = PQToLinear(static_cast<float>(b10) / 1023.0f);
 
                 r = ACESFilm(r);
                 g = ACESFilm(g);
@@ -253,6 +253,19 @@ private:
     static constexpr float ACESFilm(float x) noexcept {
         constexpr float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
         return std::max(0.0f, (x * (a * x + b)) / (x * (c * x + d) + e));
+    }
+
+    static float PQToLinear(float pq) noexcept {
+        constexpr float m1 = 0.1593017578125f;  // 2610/16384
+        constexpr float m2 = 78.84375f;         // 2523/32
+        constexpr float c1 = 0.8359375f;        // 3424/4096
+        constexpr float c2 = 18.8515625f;       // 2413/128
+        constexpr float c3 = 18.6875f;          // 2392/128
+
+        float p = std::pow(pq, 1.0f / m2);
+        float num = std::max(p - c1, 0.0f);
+        float den = c2 - c3 * p;
+        return std::pow(num / den, 1.0f / m1) / 10000.0f;
     }
 
     static constexpr float HalfToFloat(uint16_t half) noexcept {
@@ -381,13 +394,18 @@ private:
 class SelectionOverlay {
 private:
     HWND hwnd = nullptr;
+    HWND messageWnd = nullptr;
+    BYTE alpha = 0;
+    bool fadingIn = false;
+    bool fadingOut = false;
     bool isSelecting = false;
     POINT startPoint{}, endPoint{};
 
 public:
     RECT selectedRect{};
 
-    bool Create() {
+    bool Create(HWND msgWnd) {
+        messageWnd = msgWnd;
         WNDCLASS wc{
             .lpfnWndProc = WindowProc,
             .hInstance = GetModuleHandle(nullptr),
@@ -408,7 +426,7 @@ public:
         if (!hwnd) return false;
 
         ShowWindow(hwnd, SW_HIDE);
-        SetLayeredWindowAttributes(hwnd, 0, 128, LWA_ALPHA);
+        SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
         return true;
@@ -417,15 +435,22 @@ public:
     void Show() {
         isSelecting = false;
         startPoint = endPoint = POINT{};
+        alpha = 0;
+        fadingOut = false;
+        fadingIn = true;
+        KillTimer(hwnd, 2);
+        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
-        SetCapture(hwnd);
+        SetTimer(hwnd, 1, 15, nullptr);
     }
 
     void Hide() {
-        ShowWindow(hwnd, SW_HIDE);
-        ReleaseCapture();
-        isSelecting = false;
+        if (!IsWindowVisible(hwnd)) return;
+        fadingIn = false;
+        fadingOut = true;
+        KillTimer(hwnd, 1);
+        SetTimer(hwnd, 2, 15, nullptr);
     }
 
     void Destroy() {
@@ -471,7 +496,8 @@ public:
                 };
 
                 // 发送消息给主窗口
-                PostMessage(GetParent(hwnd), WM_USER + 100, 0, 0);
+                if (overlay->messageWnd)
+                    PostMessage(overlay->messageWnd, WM_USER + 100, 0, 0);
                 overlay->Hide();
             }
             break;
@@ -511,6 +537,32 @@ public:
             EndPaint(hwnd, &ps);
             break;
         }
+
+        case WM_TIMER:
+            if (wParam == 1 && overlay->fadingIn) {
+                overlay->alpha = static_cast<BYTE>(std::min<int>(overlay->alpha + 16, 128));
+                SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
+                if (overlay->alpha >= 128) {
+                    KillTimer(hwnd, 1);
+                    overlay->fadingIn = false;
+                    SetCapture(hwnd);
+                }
+            }
+            else if (wParam == 2 && overlay->fadingOut) {
+                if (overlay->alpha <= 16) {
+                    overlay->alpha = 0;
+                    SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
+                    KillTimer(hwnd, 2);
+                    overlay->fadingOut = false;
+                    ShowWindow(hwnd, SW_HIDE);
+                    ReleaseCapture();
+                    overlay->isSelecting = false;
+                } else {
+                    overlay->alpha = static_cast<BYTE>(overlay->alpha - 16);
+                    SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
+                }
+            }
+            break;
 
         default:
             return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -562,7 +614,7 @@ public:
 
         // 创建选择覆盖窗口
         overlay = std::make_unique<SelectionOverlay>();
-        if (!overlay->Create()) {
+        if (!overlay->Create(hwnd)) {
             MessageBox(nullptr, L"Failed to create selection overlay", L"Error", MB_OK);
             return false;
         }
