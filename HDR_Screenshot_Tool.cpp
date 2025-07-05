@@ -49,7 +49,7 @@ using namespace std::chrono;
 // 配置结构
 struct Config {
     std::string regionHotkey = "ctrl+alt+a";
-    std::string fullscreenHotkey = "ctrl+shift+a";
+    std::string fullscreenHotkey = "ctrl+shift+alt+a";
     std::string savePath = "Screenshots";
     bool autoStart = false;
     bool saveToFile = true;
@@ -200,11 +200,11 @@ private:
                 float g = HalfToFloat(srcRow[x * 4 + 1]);
                 float b = HalfToFloat(srcRow[x * 4 + 2]);
 
+                Rec2020ToSRGB(r, g, b);
+
                 r = ACESFilm(r);
                 g = ACESFilm(g);
                 b = ACESFilm(b);
-
-                Rec2020ToSRGB(r, g, b);
 
                 r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
                 g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
@@ -232,11 +232,11 @@ private:
                 float g = PQToLinear(static_cast<float>(g10) / 1023.0f) / 1000.0f;
                 float b = PQToLinear(static_cast<float>(b10) / 1023.0f) / 1000.0f;
 
+                Rec2020ToSRGB(r, g, b);
+
                 r = ACESFilm(r);
                 g = ACESFilm(g);
                 b = ACESFilm(b);
-
-                Rec2020ToSRGB(r, g, b);
 
                 r = GammaCorrect(std::clamp(r, 0.0f, 1.0f));
                 g = GammaCorrect(std::clamp(g, 0.0f, 1.0f));
