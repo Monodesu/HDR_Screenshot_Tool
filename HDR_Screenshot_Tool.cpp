@@ -201,12 +201,6 @@ private:
                         debug << "HDR detection based on MaxLuminance: Yes" << std::endl;
                     }
 
-                    // 强制检测：暂时假设任何非默认设置都是HDR
-                    if (!isHDREnabled) {
-                        isHDREnabled = true; // 强制启用HDR处理进行测试
-                        debug << "Force HDR processing to be enabled for testing" << std::endl;
-                    }
-
                     debug << "HDR Status: " << (isHDREnabled ? "Enabled" : "Disabled") << std::endl;
                     debug.close();
                 }
@@ -341,12 +335,6 @@ private:
                 float g = HalfToFloat(srcRow[x * 4 + 1]);
                 float b = HalfToFloat(srcRow[x * 4 + 2]);
 
-                // 如果不是调试模式，强制暗化
-                if (!GetDebugMode()) {
-                    r *= 0.1f; // 强制暗化到10%
-                    g *= 0.1f;
-                    b *= 0.1f;
-                }
 
                 // 智能处理：根据当前像素亮度调整曝光并避免过曝
                 float maxChannel = std::max({ r, g, b });
@@ -487,17 +475,36 @@ private:
         if (debugOnce) {
             std::ofstream debug("process_debug.txt", std::ios::app);
             debug << "ProcessSDR (BGRA) called." << std::endl;
+            debug << "HDR exposure value: " << GetHDRExposure() << std::endl;
             debugOnce = false;
         }
+
+        bool applyExposure = isHDREnabled;
+        float exposure = GetHDRExposure();
 
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = src + y * pitch;
             auto* dstRow = dst + y * width * 3;
 
             for (int x : std::views::iota(0, width)) {
-                dstRow[x * 3 + 0] = srcRow[x * 4 + 2]; // R
-                dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
-                dstRow[x * 3 + 2] = srcRow[x * 4 + 0]; // B
+                float r = static_cast<float>(srcRow[x * 4 + 2]) / 255.0f;
+                float g = static_cast<float>(srcRow[x * 4 + 1]) / 255.0f;
+                float b = static_cast<float>(srcRow[x * 4 + 0]) / 255.0f;
+
+                if (applyExposure) {
+                    float maxC = std::max({ r, g, b });
+                    float scale = exposure;
+                    if (maxC > 1.0f) {
+                        scale = std::min(scale, 1.0f / maxC);
+                    }
+                    r = std::clamp(r * scale, 0.0f, 1.0f);
+                    g = std::clamp(g * scale, 0.0f, 1.0f);
+                    b = std::clamp(b * scale, 0.0f, 1.0f);
+                }
+
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
             }
         }
     }
