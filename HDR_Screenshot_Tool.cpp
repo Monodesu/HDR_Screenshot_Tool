@@ -190,7 +190,7 @@ private:
         }
 
         // 保存到剪贴板
-        bool clipboardSuccess = SaveToClipboard(rgbBuffer);
+        bool clipboardSuccess = SaveToClipboard(rgbBuffer, width, height);
 
         // 如果需要保存到文件
         bool fileSuccess = true;
@@ -397,9 +397,7 @@ private:
         return file.good();
     }
 
-    bool SaveToClipboard(std::span<const uint8_t> data) {
-        auto width = screenWidth;
-        auto height = screenHeight;
+    bool SaveToClipboard(std::span<const uint8_t> data, int width, int height) {
 
         // 创建DIB数据
         int imageSize = width * height * 3;
