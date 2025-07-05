@@ -114,6 +114,14 @@ public:
         const std::vector<MonitorInfo>& GetMonitors() const { return monitors; }
         int GetVirtualLeft() const { return virtualLeft; }
         int GetVirtualTop() const { return virtualTop; }
+        bool Reinitialize() {
+                monitors.clear();
+                d3dContext.Reset();
+                d3dDevice.Reset();
+                virtualLeft = virtualTop = 0;
+                virtualWidth = virtualHeight = 0;
+                return Initialize();
+        }
         bool Initialize() {
 		D3D_FEATURE_LEVEL featureLevel;
 		HRESULT hr = D3D11CreateDevice(
@@ -186,7 +194,9 @@ public:
                         DXGI_OUTDUPL_FRAME_INFO frameInfo;
                        HRESULT hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
                        if (FAILED(hr)) {
-                               if (hr == DXGI_ERROR_ACCESS_LOST) InitMonitor(m);
+                               if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_REMOVED) {
+                                       InitMonitor(m);
+                               }
                                hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
                        }
                        if (FAILED(hr)) { allSuccess = false; continue; }
@@ -261,7 +271,7 @@ public:
 
                if (!gotFrame || !allSuccess ||
                    std::all_of(buffer.begin(), buffer.end(), [](uint8_t v) { return v == 0; })) {
-                        return CaptureRegionGDI(x, y, width, height, filename);
+                        return false;
                }
 
                return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
@@ -272,43 +282,6 @@ public:
         }
 
 private:
-        bool CaptureRegionGDI(int x, int y, int width, int height, const std::string& filename) {
-                HDC screenDC = GetDC(nullptr);
-                HDC memDC = CreateCompatibleDC(screenDC);
-                BITMAPINFO bmi{};
-                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-                bmi.bmiHeader.biWidth = width;
-                bmi.bmiHeader.biHeight = -height; // top-down
-                bmi.bmiHeader.biPlanes = 1;
-                bmi.bmiHeader.biBitCount = 32;
-                bmi.bmiHeader.biCompression = BI_RGB;
-                void* bits = nullptr;
-                HBITMAP hBitmap = CreateDIBSection(memDC, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-                if (!hBitmap) {
-                        DeleteDC(memDC);
-                        ReleaseDC(nullptr, screenDC);
-                        return false;
-                }
-                auto old = SelectObject(memDC, hBitmap);
-                BitBlt(memDC, 0, 0, width, height, screenDC, x, y, SRCCOPY);
-
-                // GDI 捕获只会得到已经色调映射到 SDR 的图像
-                if (GetDebugMode() && isHDREnabled) {
-                        std::ofstream debug("debug.txt", std::ios::app);
-                        debug << "Fallback to GDI - HDR data unavailable" << std::endl;
-                }
-
-                std::vector<uint8_t> buffer(width * height * 4);
-                memcpy(buffer.data(), bits, buffer.size());
-
-                SelectObject(memDC, old);
-                DeleteObject(hBitmap);
-                DeleteDC(memDC);
-                ReleaseDC(nullptr, screenDC);
-
-                return ProcessAndSave(buffer.data(), width, height, width * 4, DXGI_FORMAT_B8G8R8A8_UNORM, filename);
-        }
-
         void DetectHDRStatus() {
 		// 检测显示器是否支持HDR并已启用
 		DXGI_OUTPUT_DESC1 outputDesc1;
@@ -1541,18 +1514,28 @@ private:
 			}
 			break;
 
-		case WM_HOTKEY:
-			if (wParam == WM_HOTKEY_REGION) {
-				app->TakeRegionScreenshot();
-			}
-			else if (wParam == WM_HOTKEY_FULLSCREEN) {
-				app->TakeFullscreenScreenshot();
-			}
-			break;
+                case WM_HOTKEY:
+                        if (wParam == WM_HOTKEY_REGION) {
+                                app->TakeRegionScreenshot();
+                        }
+                        else if (wParam == WM_HOTKEY_FULLSCREEN) {
+                                app->TakeFullscreenScreenshot();
+                        }
+                        break;
 
-		case WM_USER + 100: // 区域选择完成
-			app->OnRegionSelected();
-			break;
+                case WM_DISPLAYCHANGE:
+                case WM_DEVICECHANGE:
+                        app->capture->Reinitialize();
+                        break;
+
+                case WM_POWERBROADCAST:
+                        if (wParam == PBT_APMRESUMESUSPEND || wParam == PBT_APMRESUMECRITICAL)
+                                app->capture->Reinitialize();
+                        break;
+
+                case WM_USER + 100: // 区域选择完成
+                        app->OnRegionSelected();
+                        break;
 
 		case WM_DESTROY:
 			PostQuitMessage(0);
