@@ -71,7 +71,10 @@ struct Config {
 class HDRScreenCapture {
 private:
         struct MonitorInfo {
+                ComPtr<IDXGIAdapter1> adapter;
                 ComPtr<IDXGIOutput6> output6;
+                ComPtr<ID3D11Device> device;
+                ComPtr<ID3D11DeviceContext> context;
                 ComPtr<IDXGIOutputDuplication> dupl;
                 RECT desktopRect{};
                 UINT width = 0;
@@ -79,10 +82,17 @@ private:
                 DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
         };
         bool InitMonitor(MonitorInfo& info) {
+                D3D_FEATURE_LEVEL fl;
+                HRESULT hr = D3D11CreateDevice(
+                        info.adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+                        0, nullptr, 0, D3D11_SDK_VERSION,
+                        &info.device, &fl, &info.context);
+                if (FAILED(hr)) return false;
+
                 DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                HRESULT hr = info.output6->DuplicateOutput1(d3dDevice.Get(), 0, 1, &fmt, &info.dupl);
+                hr = info.output6->DuplicateOutput1(info.device.Get(), 0, 1, &fmt, &info.dupl);
                 if (FAILED(hr)) {
-                        hr = info.output6->DuplicateOutput(d3dDevice.Get(), &info.dupl);
+                        hr = info.output6->DuplicateOutput(info.device.Get(), &info.dupl);
                 }
                 if (FAILED(hr)) return false;
 
@@ -94,8 +104,6 @@ private:
 
                 return true;
         }
-        ComPtr<ID3D11Device> d3dDevice;
-        ComPtr<ID3D11DeviceContext> d3dContext;
         std::vector<MonitorInfo> monitors;
         int virtualLeft = 0;
         int virtualTop = 0;
@@ -118,52 +126,45 @@ public:
         int GetVirtualTop() const { return virtualTop; }
         bool Reinitialize() {
                 monitors.clear();
-                d3dContext.Reset();
-                d3dDevice.Reset();
                 virtualLeft = virtualTop = 0;
                 virtualWidth = virtualHeight = 0;
                 return Initialize();
         }
         bool Initialize() {
-		D3D_FEATURE_LEVEL featureLevel;
-		HRESULT hr = D3D11CreateDevice(
-			nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-			0, nullptr, 0, D3D11_SDK_VERSION,
-			&d3dDevice, &featureLevel, &d3dContext);
+                ComPtr<IDXGIFactory1> factory;
+                if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
 
-		if (FAILED(hr)) return false;
-
-		ComPtr<IDXGIDevice> dxgiDevice;
-		hr = d3dDevice.As(&dxgiDevice);
-		if (FAILED(hr)) return false;
-
-		ComPtr<IDXGIAdapter> adapter;
-		hr = dxgiDevice->GetAdapter(&adapter);
-		if (FAILED(hr)) return false;
-
-                UINT i = 0;
+                UINT adapterIndex = 0;
                 RECT virtualRect{ INT_MAX, INT_MAX, INT_MIN, INT_MIN };
                 while (true) {
-                        ComPtr<IDXGIOutput> output;
-                        if (FAILED(adapter->EnumOutputs(i, &output))) break;
+                        ComPtr<IDXGIAdapter1> adapter;
+                        if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter))) break;
 
-                        MonitorInfo info{};
-                        if (FAILED(output.As(&info.output6))) break;
+                        UINT outputIndex = 0;
+                        while (true) {
+                                ComPtr<IDXGIOutput> output;
+                                if (FAILED(adapter->EnumOutputs(outputIndex, &output))) break;
 
-                        DXGI_OUTPUT_DESC desc;
-                        info.output6->GetDesc(&desc);
-                        info.desktopRect = desc.DesktopCoordinates;
+                                MonitorInfo info{};
+                                info.adapter = adapter;
+                                if (FAILED(output.As(&info.output6))) { ++outputIndex; continue; }
 
-                        virtualRect.left = std::min(virtualRect.left, desc.DesktopCoordinates.left);
-                        virtualRect.top = std::min(virtualRect.top, desc.DesktopCoordinates.top);
-                        virtualRect.right = std::max(virtualRect.right, desc.DesktopCoordinates.right);
-                        virtualRect.bottom = std::max(virtualRect.bottom, desc.DesktopCoordinates.bottom);
+                                DXGI_OUTPUT_DESC desc;
+                                info.output6->GetDesc(&desc);
+                                info.desktopRect = desc.DesktopCoordinates;
 
-                        if (InitMonitor(info)) {
-                                monitors.push_back(std::move(info));
+                                virtualRect.left = std::min(virtualRect.left, desc.DesktopCoordinates.left);
+                                virtualRect.top = std::min(virtualRect.top, desc.DesktopCoordinates.top);
+                                virtualRect.right = std::max(virtualRect.right, desc.DesktopCoordinates.right);
+                                virtualRect.bottom = std::max(virtualRect.bottom, desc.DesktopCoordinates.bottom);
+
+                                if (InitMonitor(info)) {
+                                        monitors.push_back(std::move(info));
+                                }
+
+                                ++outputIndex;
                         }
-
-                        ++i;
+                        ++adapterIndex;
                 }
 
                 if (monitors.empty()) return false;
@@ -224,13 +225,13 @@ public:
                         stagingDesc.BindFlags = 0;
                         stagingDesc.MiscFlags = 0;
                         ComPtr<ID3D11Texture2D> staging;
-                        if (FAILED(d3dDevice->CreateTexture2D(&stagingDesc, nullptr, &staging))) continue;
-                        d3dContext->CopyResource(staging.Get(), texture.Get());
+                        if (FAILED(m.device->CreateTexture2D(&stagingDesc, nullptr, &staging))) continue;
+                        m.context->CopyResource(staging.Get(), texture.Get());
 
                         D3D11_MAPPED_SUBRESOURCE mapped{};
-                        if (FAILED(d3dContext->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) continue;
+                        if (FAILED(m.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) continue;
 
-                        auto unmap = [&](void*) { d3dContext->Unmap(staging.Get(), 0); };
+                        auto unmap = [&](void*) { m.context->Unmap(staging.Get(), 0); };
                         std::unique_ptr<void, decltype(unmap)> mapGuard(reinterpret_cast<void*>(1), unmap);
 
                         int destX = inter.left - x;
@@ -1078,8 +1079,8 @@ class ScreenshotApp {
 private:
 	HWND hwnd = nullptr;
 	NOTIFYICONDATA nid{};
-	std::unique_ptr<HDRScreenCapture> capture;
-	std::unique_ptr<SelectionOverlay> overlay;
+        // 不在此处持有 HDRScreenCapture，对象将在每次截图时临时创建
+        std::unique_ptr<SelectionOverlay> overlay;
 	Config config;
 
 public:
@@ -1106,13 +1107,7 @@ public:
 		// 加载配置
 		LoadConfig();
 
-		// 初始化HDR截图
-		capture = std::make_unique<HDRScreenCapture>();
-		capture->SetConfig(&config); // 传递配置
-		if (!capture->Initialize()) {
-			MessageBox(nullptr, L"Failed to initialize HDR capture", L"Error", MB_OK);
-			return false;
-		}
+                // HDRScreenCapture 不再在此持久化创建，改为截图时临时初始化
 
 		// 创建选择覆盖窗口
 		overlay = std::make_unique<SelectionOverlay>();
@@ -1379,9 +1374,16 @@ private:
                                         tm.tm_hour, tm.tm_min, tm.tm_sec);
                         }
 
+                        HDRScreenCapture cap;
+                        cap.SetConfig(&config);
+                        if (!cap.Initialize()) {
+                                ShowNotification(L"截图失败");
+                                return;
+                        }
+
                         int w = full.right - full.left;
                         int h = full.bottom - full.top;
-                        if (TryCapture([&] { return capture->CaptureRegion(full.left, full.top, w, h, filename.value_or("")); })) {
+                        if (TryCapture([&] { return cap.CaptureRegion(full.left, full.top, w, h, filename.value_or("")); })) {
                                 if (config.saveToFile && filename) {
                                         ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                                 } else {
@@ -1412,18 +1414,24 @@ private:
 		}
 
                 bool success = false;
+                HDRScreenCapture cap;
+                cap.SetConfig(&config);
+                if (!cap.Initialize()) {
+                        ShowNotification(L"截图失败");
+                        return;
+                }
                 if (config.fullscreenCurrentMonitor) {
                         POINT pt; GetCursorPos(&pt);
-                        for (const auto& m : capture->GetMonitors()) {
+                        for (const auto& m : cap.GetMonitors()) {
                                 if (PtInRect(&m.desktopRect, pt)) {
                                         int w = m.desktopRect.right - m.desktopRect.left;
                                         int h = m.desktopRect.bottom - m.desktopRect.top;
-                                        success = TryCapture([&] { return capture->CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or("") ); });
+                                        success = TryCapture([&] { return cap.CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or("") ); });
                                         break;
                                 }
                         }
                 } else {
-                        success = TryCapture([&] { return capture->CaptureFullscreen(filename.value_or("")); });
+                        success = TryCapture([&] { return cap.CaptureFullscreen(filename.value_or("")); });
                 }
 
                 if (success) {
@@ -1460,9 +1468,17 @@ private:
 					tm.tm_hour, tm.tm_min, tm.tm_sec);
 			}
 
-                        int globalLeft = rect.left + capture->GetVirtualLeft();
-                        int globalTop = rect.top + capture->GetVirtualTop();
-                        if (TryCapture([&] { return capture->CaptureRegion(globalLeft, globalTop, width, height, filename.value_or("")); })) {
+                        int globalLeft = rect.left + GetSystemMetrics(SM_XVIRTUALSCREEN);
+                        int globalTop = rect.top + GetSystemMetrics(SM_YVIRTUALSCREEN);
+
+                        HDRScreenCapture cap;
+                        cap.SetConfig(&config);
+                        if (!cap.Initialize()) {
+                                ShowNotification(L"截图失败");
+                                return;
+                        }
+
+                        if (TryCapture([&] { return cap.CaptureRegion(globalLeft, globalTop, width, height, filename.value_or("")); })) {
                                 if (config.saveToFile && filename) {
                                         ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                                 }
@@ -1545,12 +1561,11 @@ private:
 
                 case WM_DISPLAYCHANGE:
                 case WM_DEVICECHANGE:
-                        app->capture->Reinitialize();
+                        // 截图时会重新初始化设备，此处无需处理
                         break;
 
                 case WM_POWERBROADCAST:
-                        if (wParam == PBT_APMRESUMESUSPEND || wParam == PBT_APMRESUMECRITICAL)
-                                app->capture->Reinitialize();
+                        // 休眠恢复后无需特别操作
                         break;
 
                 case WM_USER + 100: // 区域选择完成
