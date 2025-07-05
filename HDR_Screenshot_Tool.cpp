@@ -265,7 +265,7 @@ private:
         float p = std::pow(pq, 1.0f / m2);
         float num = std::max(p - c1, 0.0f);
         float den = c2 - c3 * p;
-        return std::pow(num / den, 1.0f / m1) / 10000.0f;
+        return std::pow(num / den, 1.0f / m1) * 10000.0f / 80.0f;
     }
 
     static constexpr float HalfToFloat(uint16_t half) noexcept {
@@ -433,6 +433,8 @@ public:
     }
 
     void Show() {
+        auto style = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
         isSelecting = false;
         startPoint = endPoint = POINT{};
         alpha = 0;
@@ -556,6 +558,8 @@ public:
                     overlay->fadingOut = false;
                     ShowWindow(hwnd, SW_HIDE);
                     ReleaseCapture();
+                    auto style2 = GetWindowLong(hwnd, GWL_EXSTYLE);
+                    SetWindowLong(hwnd, GWL_EXSTYLE, style2 | WS_EX_TRANSPARENT);
                     overlay->isSelecting = false;
                 } else {
                     overlay->alpha = static_cast<BYTE>(overlay->alpha - 16);
