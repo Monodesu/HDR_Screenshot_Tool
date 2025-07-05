@@ -332,55 +332,43 @@ private:
     }
 
     void ProcessHDR16Float(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
-        // 添加调试输出
-        static bool debugOnce = true;
-        if (debugOnce) {
-            std::ofstream debug("debug.txt", std::ios::app);
-            debug << "ProcessHDR16Float called." << std::endl;
-            debugOnce = false;
-        }
+        // 获取当前显示器 HDR 最大亮度
+        auto meta = GetDisplayHDRMetadata();
+        float maxNits = meta.maxLuminance > 0.0f ? meta.maxLuminance : 1000.0f;
 
-        // 调试模式：输出原始数据
-        if (GetDebugMode()) {
-            static bool debugRawOnce = true;
-            if (debugRawOnce) {
-                std::ofstream debug("debug.txt", std::ios::app);
-                debug << "HDR raw data analysis (first 100 pixels):\n";
-                auto* srcRow = reinterpret_cast<uint16_t*>(src);
-                for (int i = 0; i < 100 && i < width; ++i) {
-                    float r = HalfToFloat(srcRow[i * 4 + 0]);
-                    float g = HalfToFloat(srcRow[i * 4 + 1]);
-                    float b = HalfToFloat(srcRow[i * 4 + 2]);
-                    debug << std::format("Pixel{}: R={:.6f} G={:.6f} B={:.6f}\n", i, r, g, b);
-                }
-                debugRawOnce = false;
-            }
-        }
+        // 目标 SDR 显示亮度，使用 250 nits 作为日常最常用亮度
+        float targetNits = 250.0f;
+
+        // 计算曝光系数
+        float exposure = targetNits / maxNits;
 
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = reinterpret_cast<uint16_t*>(src + y * pitch);
             auto* dstRow = dst + y * width * 3;
 
             for (int x : std::views::iota(0, width)) {
-                float r = HalfToFloat(srcRow[x * 4 + 0]);
-                float g = HalfToFloat(srcRow[x * 4 + 1]);
-                float b = HalfToFloat(srcRow[x * 4 + 2]);
+                float r = HalfToFloat(srcRow[x * 4 + 0]) * exposure;
+                float g = HalfToFloat(srcRow[x * 4 + 1]) * exposure;
+                float b = HalfToFloat(srcRow[x * 4 + 2]) * exposure;
 
+                // ACES 色调映射
+                r = ACESFilmToneMapping(r);
+                g = ACESFilmToneMapping(g);
+                b = ACESFilmToneMapping(b);
 
-                r = NonLinearToneMap(r);
-                g = NonLinearToneMap(g);
-                b = NonLinearToneMap(b);
-
+                // sRGB 伽马校正
                 r = LinearToSRGB(r);
                 g = LinearToSRGB(g);
                 b = LinearToSRGB(b);
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+                // 写入 RGB 输出
+                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r * 255.0f + 0.5f, 0.0f, 255.0f));
+                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g * 255.0f + 0.5f, 0.0f, 255.0f));
+                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b * 255.0f + 0.5f, 0.0f, 255.0f));
             }
         }
     }
+
 
     bool GetDebugMode() const {
         return config ? config->debugMode : false;
@@ -415,9 +403,9 @@ private:
                 Rec2020ToSRGB(r, g, b);
 
                 // 非线性色调映射
-                r = NonLinearToneMap(r);
-                g = NonLinearToneMap(g);
-                b = NonLinearToneMap(b);
+                r = ACESFilmToneMapping(r);
+                g = ACESFilmToneMapping(g);
+                b = ACESFilmToneMapping(b);
 
                 // sRGB伽马校正
                 r = LinearToSRGB(std::clamp(r, 0.0f, 1.0f));
@@ -510,9 +498,17 @@ private:
         }
     }
 
-    static constexpr float NonLinearToneMap(float x) noexcept {
-        // 简单的 x/(1+x) 色调映射
+    static float ReinhardToneMapping(float x) {
         return x / (1.0f + x);
+    }
+
+    static float ACESFilmToneMapping(float x) {
+        const float a = 2.51f;
+        const float b = 0.03f;
+        const float c = 2.43f;
+        const float d = 0.59f;
+        const float e = 0.14f;
+        return std::clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0f, 1.0f);
     }
 
     static float LinearToSRGB(float linear) noexcept {
@@ -556,23 +552,42 @@ private:
         return std::pow(num / den, 1.0f / m1) * 10000.0f;
     }
 
-    static constexpr float HalfToFloat(uint16_t half) noexcept {
-        uint32_t sign = (half >> 15) & 0x1;
-        uint32_t exp = (half >> 10) & 0x1F;
-        uint32_t mantissa = half & 0x3FF;
+    static float HalfToFloat(uint16_t h) {
+        uint16_t h_exp = (h & 0x7C00) >> 10;
+        uint16_t h_sig = h & 0x03FF;
+        uint32_t f_sgn = (h & 0x8000) << 16;
+        uint32_t f_exp, f_sig;
 
-        if (exp == 0) {
-            if (mantissa == 0) return sign ? -0.0f : 0.0f;
-            float value = mantissa / 1024.0f;
-            return sign ? -value * std::pow(2.0f, -14.0f) : value * std::pow(2.0f, -14.0f);
+        if (h_exp == 0) {
+            if (h_sig == 0) {
+                f_exp = 0;
+                f_sig = 0;
+            }
+            else {
+                // Subnormal half-precision number
+                h_exp += 1;
+                while ((h_sig & 0x0400) == 0) {
+                    h_sig <<= 1;
+                    h_exp -= 1;
+                }
+                h_sig &= 0x03FF;
+                f_exp = (h_exp + (127 - 15)) << 23;
+                f_sig = h_sig << 13;
+            }
         }
-        else if (exp == 31) {
-            return sign ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+        else if (h_exp == 0x1F) {
+            f_exp = 0xFF << 23;
+            f_sig = h_sig << 13;
         }
         else {
-            float value = (1.0f + mantissa / 1024.0f) * std::pow(2.0f, exp - 15);
-            return sign ? -value : value;
+            f_exp = (h_exp + (127 - 15)) << 23;
+            f_sig = h_sig << 13;
         }
+
+        uint32_t f = f_sgn | f_exp | f_sig;
+        float result;
+        memcpy(&result, &f, sizeof(result));
+        return result;
     }
 
     bool SavePNG(std::span<const uint8_t> data, int width, int height, const std::string& filename) {
