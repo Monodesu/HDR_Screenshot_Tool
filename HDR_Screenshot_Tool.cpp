@@ -179,7 +179,7 @@ private:
         }
 
         // 保存到剪贴板
-        bool clipboardSuccess = SaveToClipboard(rgbBuffer);
+        bool clipboardSuccess = SaveToClipboard(rgbBuffer, width, height);
 
         // 如果需要保存到文件
         bool fileSuccess = true;
@@ -222,9 +222,9 @@ private:
                 uint32_t g10 = (pixel >> 10) & 0x3FF;
                 uint32_t b10 = pixel & 0x3FF;
 
-                float r = PQToLinear(static_cast<float>(r10) / 1023.0f);
-                float g = PQToLinear(static_cast<float>(g10) / 1023.0f);
-                float b = PQToLinear(static_cast<float>(b10) / 1023.0f);
+                float r = PQToLinear(static_cast<float>(r10) / 1023.0f) / 1000.0f;
+                float g = PQToLinear(static_cast<float>(g10) / 1023.0f) / 1000.0f;
+                float b = PQToLinear(static_cast<float>(b10) / 1023.0f) / 1000.0f;
 
                 r = ACESFilm(r);
                 g = ACESFilm(g);
@@ -256,16 +256,18 @@ private:
     }
 
     static float PQToLinear(float pq) noexcept {
+        // ST2084 EOTF from normalized PQ value to absolute nits
         constexpr float m1 = 0.1593017578125f;  // 2610/16384
         constexpr float m2 = 78.84375f;         // 2523/32
         constexpr float c1 = 0.8359375f;        // 3424/4096
         constexpr float c2 = 18.8515625f;       // 2413/128
         constexpr float c3 = 18.6875f;          // 2392/128
 
+        pq = std::clamp(pq, 0.0f, 1.0f);
         float p = std::pow(pq, 1.0f / m2);
         float num = std::max(p - c1, 0.0f);
         float den = c2 - c3 * p;
-        return std::pow(num / den, 1.0f / m1) * 10000.0f / 80.0f;
+        return std::pow(num / den, 1.0f / m1); // result in nits (0-10000)
     }
 
     static constexpr float HalfToFloat(uint16_t half) noexcept {
@@ -312,9 +314,7 @@ private:
         return false;
     }
 
-    bool SaveToClipboard(std::span<const uint8_t> data) {
-        auto width = screenWidth;
-        auto height = screenHeight;
+    bool SaveToClipboard(std::span<const uint8_t> data, int width, int height) {
 
         // 创建DIB数据
         int imageSize = width * height * 3;
