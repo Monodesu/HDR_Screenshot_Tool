@@ -23,6 +23,7 @@
 #include <span>
 #include <chrono>
 #include <algorithm>
+#include <cwchar>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -221,9 +222,9 @@ private:
                 uint32_t g10 = (pixel >> 10) & 0x3FF;
                 uint32_t b10 = pixel & 0x3FF;
 
-                float r = PQToLinear(r10 / 1023.0f);
-                float g = PQToLinear(g10 / 1023.0f);
-                float b = PQToLinear(b10 / 1023.0f);
+                float r = static_cast<float>(r10) / 1023.0f;
+                float g = static_cast<float>(g10) / 1023.0f;
+                float b = static_cast<float>(b10) / 1023.0f;
 
                 r = ACESFilm(r);
                 g = ACESFilm(g);
@@ -252,17 +253,6 @@ private:
     static constexpr float ACESFilm(float x) noexcept {
         constexpr float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
         return std::max(0.0f, (x * (a * x + b)) / (x * (c * x + d) + e));
-    }
-
-    static float PQToLinear(float pq) noexcept {
-        constexpr float m1 = 0.1593017578125f, m2 = 78.84375f;
-        constexpr float c1 = 0.8359375f, c2 = 18.8515625f, c3 = 18.6875f;
-
-        float p = std::pow(pq, 1.0f / m2);
-        float num = std::max(0.0f, p - c1);
-        float den = c2 - c3 * p;
-
-        return std::pow(num / den, 1.0f / m1) * 10000.0f / 80.0f;
     }
 
     static constexpr float HalfToFloat(uint16_t half) noexcept {
@@ -411,12 +401,13 @@ public:
         hwnd = CreateWindowEx(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
             L"SelectionOverlay", L"",
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP,
             0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
             nullptr, nullptr, GetModuleHandle(nullptr), this);
 
         if (!hwnd) return false;
 
+        ShowWindow(hwnd, SW_HIDE);
         SetLayeredWindowAttributes(hwnd, 0, 128, LWA_ALPHA);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
@@ -424,6 +415,8 @@ public:
     }
 
     void Show() {
+        isSelecting = false;
+        startPoint = endPoint = POINT{};
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
         SetCapture(hwnd);
@@ -432,6 +425,7 @@ public:
     void Hide() {
         ShowWindow(hwnd, SW_HIDE);
         ReleaseCapture();
+        isSelecting = false;
     }
 
     void Destroy() {
@@ -746,8 +740,11 @@ private:
         }
 
         if (capture->CaptureFullscreen(filename.value_or(""))) {
-            ShowNotification(config.saveToFile ?
-                L"全屏截图已保存到文件和剪贴板" : L"全屏截图已保存到剪贴板");
+            if (config.saveToFile) {
+                ShowNotification(L"全屏截图已保存", std::wstring(filename->begin(), filename->end()));
+            } else {
+                ShowNotification(L"全屏截图已复制到剪贴板");
+            }
         }
     }
 
@@ -773,15 +770,21 @@ private:
             }
 
             if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""))) {
-                ShowNotification(config.saveToFile ?
-                    L"区域截图已保存到文件和剪贴板" : L"区域截图已保存到剪贴板");
+                if (config.saveToFile) {
+                    ShowNotification(L"区域截图已保存", std::wstring(filename->begin(), filename->end()));
+                } else {
+                    ShowNotification(L"区域截图已复制到剪贴板");
+                }
             }
         }
     }
 
-    void ShowNotification(const wchar_t* message) {
+    void ShowNotification(const std::wstring& message,
+        const std::optional<std::wstring>& path = std::nullopt) {
         nid.uFlags = NIF_INFO;
-        wcscpy_s(nid.szInfo, message);
+        std::wstring info = message;
+        if (path) info += L"\n" + *path;
+        wcsncpy_s(nid.szInfo, info.c_str(), _TRUNCATE);
         wcscpy_s(nid.szInfoTitle, L"HDR Screenshot Tool");
         Shell_NotifyIcon(NIM_MODIFY, &nid);
     }
