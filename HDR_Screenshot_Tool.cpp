@@ -297,7 +297,13 @@ private:
         if (bitmap.LockBits(&rect, ImageLockModeWrite, PixelFormat24bppRGB, &bitmapData) == Ok) {
             auto* dst = static_cast<uint8_t*>(bitmapData.Scan0);
             for (int y : std::views::iota(0, height)) {
-                std::memcpy(dst + y * bitmapData.Stride, data.data() + y * width * 3, width * 3);
+                auto* dstRow = dst + y * bitmapData.Stride;
+                auto* srcRow = data.data() + y * width * 3;
+                for (int x : std::views::iota(0, width)) {
+                    dstRow[x * 3 + 0] = srcRow[x * 3 + 2]; // B
+                    dstRow[x * 3 + 1] = srcRow[x * 3 + 1]; // G
+                    dstRow[x * 3 + 2] = srcRow[x * 3 + 0]; // R
+                }
             }
             bitmap.UnlockBits(&bitmapData);
 
@@ -398,6 +404,7 @@ private:
     BYTE alpha = 0;
     bool fadingIn = false;
     bool fadingOut = false;
+    bool notifyHide = false;
     bool isSelecting = false;
     POINT startPoint{}, endPoint{};
 
@@ -447,8 +454,9 @@ public:
         SetTimer(hwnd, 1, 15, nullptr);
     }
 
-    void Hide() {
+    void Hide(bool notify = false) {
         if (!IsWindowVisible(hwnd)) return;
+        notifyHide = notify;
         fadingIn = false;
         fadingOut = true;
         KillTimer(hwnd, 1);
@@ -478,7 +486,7 @@ public:
             if (overlay->isSelecting) {
                 overlay->endPoint.x = GET_X_LPARAM(lParam);
                 overlay->endPoint.y = GET_Y_LPARAM(lParam);
-                InvalidateRect(hwnd, nullptr, TRUE);
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
             break;
 
@@ -497,10 +505,7 @@ public:
                     .bottom = maxY
                 };
 
-                // 发送消息给主窗口
-                if (overlay->messageWnd)
-                    PostMessage(overlay->messageWnd, WM_USER + 100, 0, 0);
-                overlay->Hide();
+                overlay->Hide(true);
             }
             break;
 
@@ -561,6 +566,9 @@ public:
                     auto style2 = GetWindowLong(hwnd, GWL_EXSTYLE);
                     SetWindowLong(hwnd, GWL_EXSTYLE, style2 | WS_EX_TRANSPARENT);
                     overlay->isSelecting = false;
+                    if (overlay->notifyHide && overlay->messageWnd)
+                        PostMessage(overlay->messageWnd, WM_USER + 100, 0, 0);
+                    overlay->notifyHide = false;
                 } else {
                     overlay->alpha = static_cast<BYTE>(overlay->alpha - 16);
                     SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
