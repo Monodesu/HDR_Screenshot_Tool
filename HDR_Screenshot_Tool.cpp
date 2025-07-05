@@ -170,15 +170,13 @@ public:
         }
 
        bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
-               for (auto& m : monitors) {
-                       InitMonitor(m); // Always reinitialize duplication to avoid stale frames
-               }
-                RECT regionRect{ x, y, x + width, y + height };
+               RECT regionRect{ x, y, x + width, y + height };
 
-                DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-                UINT bpp = 0;
-                std::vector<uint8_t> buffer;
-                bool gotFrame = false;
+               DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+               UINT bpp = 0;
+               std::vector<uint8_t> buffer;
+               bool gotFrame = false;
+               bool allSuccess = true;
 
                 for (auto& m : monitors) {
                         RECT inter{};
@@ -186,14 +184,13 @@ public:
 
                         ComPtr<IDXGIResource> resource;
                         DXGI_OUTDUPL_FRAME_INFO frameInfo;
-                        HRESULT hr = m.dupl->AcquireNextFrame(1000, &frameInfo, &resource);
-                        if (FAILED(hr)) {
-                                if (InitMonitor(m)) {
-                                        hr = m.dupl->AcquireNextFrame(1000, &frameInfo, &resource);
-                                }
-                        }
-                        if (FAILED(hr)) continue;
-                        gotFrame = true;
+                       HRESULT hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
+                       if (FAILED(hr)) {
+                               if (hr == DXGI_ERROR_ACCESS_LOST) InitMonitor(m);
+                               hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
+                       }
+                       if (FAILED(hr)) { allSuccess = false; continue; }
+                       gotFrame = true;
 
                         auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
                         std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
@@ -262,11 +259,11 @@ public:
                         }
                 }
 
-                if (buffer.empty()) {
+               if (!gotFrame || !allSuccess) {
                         return CaptureRegionGDI(x, y, width, height, filename);
-                }
+               }
 
-                return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
+               return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
         }
 
         bool CaptureFullscreen(const std::string& filename = "") {
