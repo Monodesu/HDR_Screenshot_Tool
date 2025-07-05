@@ -23,6 +23,7 @@
 #include <span>
 #include <chrono>
 #include <algorithm>
+#include <cwchar>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -178,7 +179,7 @@ private:
         }
 
         // 保存到剪贴板
-        bool clipboardSuccess = SaveToClipboard(rgbBuffer);
+        bool clipboardSuccess = SaveToClipboard(rgbBuffer, width, height);
 
         // 如果需要保存到文件
         bool fileSuccess = true;
@@ -221,9 +222,9 @@ private:
                 uint32_t g10 = (pixel >> 10) & 0x3FF;
                 uint32_t b10 = pixel & 0x3FF;
 
-                float r = PQToLinear(r10 / 1023.0f);
-                float g = PQToLinear(g10 / 1023.0f);
-                float b = PQToLinear(b10 / 1023.0f);
+                float r = PQToLinear(static_cast<float>(r10) / 1023.0f) / 1000.0f;
+                float g = PQToLinear(static_cast<float>(g10) / 1023.0f) / 1000.0f;
+                float b = PQToLinear(static_cast<float>(b10) / 1023.0f) / 1000.0f;
 
                 r = ACESFilm(r);
                 g = ACESFilm(g);
@@ -255,14 +256,18 @@ private:
     }
 
     static float PQToLinear(float pq) noexcept {
-        constexpr float m1 = 0.1593017578125f, m2 = 78.84375f;
-        constexpr float c1 = 0.8359375f, c2 = 18.8515625f, c3 = 18.6875f;
+        // ST2084 EOTF from normalized PQ value to absolute nits
+        constexpr float m1 = 0.1593017578125f;  // 2610/16384
+        constexpr float m2 = 78.84375f;         // 2523/32
+        constexpr float c1 = 0.8359375f;        // 3424/4096
+        constexpr float c2 = 18.8515625f;       // 2413/128
+        constexpr float c3 = 18.6875f;          // 2392/128
 
+        pq = std::clamp(pq, 0.0f, 1.0f);
         float p = std::pow(pq, 1.0f / m2);
-        float num = std::max(0.0f, p - c1);
+        float num = std::max(p - c1, 0.0f);
         float den = c2 - c3 * p;
-
-        return std::pow(num / den, 1.0f / m1) * 10000.0f / 80.0f;
+        return std::pow(num / den, 1.0f / m1); // result in nits (0-10000)
     }
 
     static constexpr float HalfToFloat(uint16_t half) noexcept {
@@ -292,7 +297,13 @@ private:
         if (bitmap.LockBits(&rect, ImageLockModeWrite, PixelFormat24bppRGB, &bitmapData) == Ok) {
             auto* dst = static_cast<uint8_t*>(bitmapData.Scan0);
             for (int y : std::views::iota(0, height)) {
-                std::memcpy(dst + y * bitmapData.Stride, data.data() + y * width * 3, width * 3);
+                auto* dstRow = dst + y * bitmapData.Stride;
+                auto* srcRow = data.data() + y * width * 3;
+                for (int x : std::views::iota(0, width)) {
+                    dstRow[x * 3 + 0] = srcRow[x * 3 + 2]; // B
+                    dstRow[x * 3 + 1] = srcRow[x * 3 + 1]; // G
+                    dstRow[x * 3 + 2] = srcRow[x * 3 + 0]; // R
+                }
             }
             bitmap.UnlockBits(&bitmapData);
 
@@ -309,9 +320,7 @@ private:
         return false;
     }
 
-    bool SaveToClipboard(std::span<const uint8_t> data) {
-        auto width = screenWidth;
-        auto height = screenHeight;
+    bool SaveToClipboard(std::span<const uint8_t> data, int width, int height) {
 
         // 创建DIB数据
         int imageSize = width * height * 3;
@@ -391,13 +400,19 @@ private:
 class SelectionOverlay {
 private:
     HWND hwnd = nullptr;
+    HWND messageWnd = nullptr;
+    BYTE alpha = 0;
+    bool fadingIn = false;
+    bool fadingOut = false;
+    bool notifyHide = false;
     bool isSelecting = false;
     POINT startPoint{}, endPoint{};
 
 public:
     RECT selectedRect{};
 
-    bool Create() {
+    bool Create(HWND msgWnd) {
+        messageWnd = msgWnd;
         WNDCLASS wc{
             .lpfnWndProc = WindowProc,
             .hInstance = GetModuleHandle(nullptr),
@@ -411,27 +426,41 @@ public:
         hwnd = CreateWindowEx(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
             L"SelectionOverlay", L"",
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP,
             0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
             nullptr, nullptr, GetModuleHandle(nullptr), this);
 
         if (!hwnd) return false;
 
-        SetLayeredWindowAttributes(hwnd, 0, 128, LWA_ALPHA);
+        ShowWindow(hwnd, SW_HIDE);
+        SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
         return true;
     }
 
     void Show() {
+        auto style = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+        isSelecting = false;
+        startPoint = endPoint = POINT{};
+        alpha = 0;
+        fadingOut = false;
+        fadingIn = true;
+        KillTimer(hwnd, 2);
+        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
-        SetCapture(hwnd);
+        SetTimer(hwnd, 1, 15, nullptr);
     }
 
-    void Hide() {
-        ShowWindow(hwnd, SW_HIDE);
-        ReleaseCapture();
+    void Hide(bool notify = false) {
+        if (!IsWindowVisible(hwnd)) return;
+        notifyHide = notify;
+        fadingIn = false;
+        fadingOut = true;
+        KillTimer(hwnd, 1);
+        SetTimer(hwnd, 2, 15, nullptr);
     }
 
     void Destroy() {
@@ -457,7 +486,7 @@ public:
             if (overlay->isSelecting) {
                 overlay->endPoint.x = GET_X_LPARAM(lParam);
                 overlay->endPoint.y = GET_Y_LPARAM(lParam);
-                InvalidateRect(hwnd, nullptr, TRUE);
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
             break;
 
@@ -476,9 +505,7 @@ public:
                     .bottom = maxY
                 };
 
-                // 发送消息给主窗口
-                PostMessage(GetParent(hwnd), WM_USER + 100, 0, 0);
-                overlay->Hide();
+                overlay->Hide(true);
             }
             break;
 
@@ -517,6 +544,37 @@ public:
             EndPaint(hwnd, &ps);
             break;
         }
+
+        case WM_TIMER:
+            if (wParam == 1 && overlay->fadingIn) {
+                overlay->alpha = static_cast<BYTE>(std::min<int>(overlay->alpha + 16, 128));
+                SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
+                if (overlay->alpha >= 128) {
+                    KillTimer(hwnd, 1);
+                    overlay->fadingIn = false;
+                    SetCapture(hwnd);
+                }
+            }
+            else if (wParam == 2 && overlay->fadingOut) {
+                if (overlay->alpha <= 16) {
+                    overlay->alpha = 0;
+                    SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
+                    KillTimer(hwnd, 2);
+                    overlay->fadingOut = false;
+                    ShowWindow(hwnd, SW_HIDE);
+                    ReleaseCapture();
+                    auto style2 = GetWindowLong(hwnd, GWL_EXSTYLE);
+                    SetWindowLong(hwnd, GWL_EXSTYLE, style2 | WS_EX_TRANSPARENT);
+                    overlay->isSelecting = false;
+                    if (overlay->notifyHide && overlay->messageWnd)
+                        PostMessage(overlay->messageWnd, WM_USER + 100, 0, 0);
+                    overlay->notifyHide = false;
+                } else {
+                    overlay->alpha = static_cast<BYTE>(overlay->alpha - 16);
+                    SetLayeredWindowAttributes(hwnd, 0, overlay->alpha, LWA_ALPHA);
+                }
+            }
+            break;
 
         default:
             return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -568,7 +626,7 @@ public:
 
         // 创建选择覆盖窗口
         overlay = std::make_unique<SelectionOverlay>();
-        if (!overlay->Create()) {
+        if (!overlay->Create(hwnd)) {
             MessageBox(nullptr, L"Failed to create selection overlay", L"Error", MB_OK);
             return false;
         }
@@ -746,8 +804,11 @@ private:
         }
 
         if (capture->CaptureFullscreen(filename.value_or(""))) {
-            ShowNotification(config.saveToFile ?
-                L"全屏截图已保存到文件和剪贴板" : L"全屏截图已保存到剪贴板");
+            if (config.saveToFile) {
+                ShowNotification(L"全屏截图已保存", std::wstring(filename->begin(), filename->end()));
+            } else {
+                ShowNotification(L"全屏截图已复制到剪贴板");
+            }
         }
     }
 
@@ -773,15 +834,21 @@ private:
             }
 
             if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""))) {
-                ShowNotification(config.saveToFile ?
-                    L"区域截图已保存到文件和剪贴板" : L"区域截图已保存到剪贴板");
+                if (config.saveToFile) {
+                    ShowNotification(L"区域截图已保存", std::wstring(filename->begin(), filename->end()));
+                } else {
+                    ShowNotification(L"区域截图已复制到剪贴板");
+                }
             }
         }
     }
 
-    void ShowNotification(const wchar_t* message) {
+    void ShowNotification(const std::wstring& message,
+        const std::optional<std::wstring>& path = std::nullopt) {
         nid.uFlags = NIF_INFO;
-        wcscpy_s(nid.szInfo, message);
+        std::wstring info = message;
+        if (path) info += L"\n" + *path;
+        wcsncpy_s(nid.szInfo, info.c_str(), _TRUNCATE);
         wcscpy_s(nid.szInfoTitle, L"HDR Screenshot Tool");
         Shell_NotifyIcon(NIM_MODIFY, &nid);
     }
