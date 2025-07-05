@@ -175,6 +175,7 @@ public:
                 DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
                 UINT bpp = 0;
                 std::vector<uint8_t> buffer;
+                bool gotFrame = false;
 
                 for (auto& m : monitors) {
                         RECT inter{};
@@ -189,6 +190,7 @@ public:
                                 }
                         }
                         if (FAILED(hr)) continue;
+                        gotFrame = true;
 
                         auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
                         std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
@@ -257,7 +259,9 @@ public:
                         }
                 }
 
-                if (buffer.empty()) return false;
+                if (buffer.empty()) {
+                        return CaptureRegionGDI(x, y, width, height, filename);
+                }
 
                 return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
         }
@@ -267,7 +271,38 @@ public:
         }
 
 private:
-	void DetectHDRStatus() {
+        bool CaptureRegionGDI(int x, int y, int width, int height, const std::string& filename) {
+                HDC screenDC = GetDC(nullptr);
+                HDC memDC = CreateCompatibleDC(screenDC);
+                BITMAPINFO bmi{};
+                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                bmi.bmiHeader.biWidth = width;
+                bmi.bmiHeader.biHeight = -height; // top-down
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB;
+                void* bits = nullptr;
+                HBITMAP hBitmap = CreateDIBSection(memDC, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+                if (!hBitmap) {
+                        DeleteDC(memDC);
+                        ReleaseDC(nullptr, screenDC);
+                        return false;
+                }
+                auto old = SelectObject(memDC, hBitmap);
+                BitBlt(memDC, 0, 0, width, height, screenDC, x, y, SRCCOPY);
+
+                std::vector<uint8_t> buffer(width * height * 4);
+                memcpy(buffer.data(), bits, buffer.size());
+
+                SelectObject(memDC, old);
+                DeleteObject(hBitmap);
+                DeleteDC(memDC);
+                ReleaseDC(nullptr, screenDC);
+
+                return ProcessAndSave(buffer.data(), width, height, width * 4, DXGI_FORMAT_B8G8R8A8_UNORM, filename);
+        }
+
+        void DetectHDRStatus() {
 		// 检测显示器是否支持HDR并已启用
 		DXGI_OUTPUT_DESC1 outputDesc1;
 		isHDREnabled = false; // 默认为false
