@@ -7,6 +7,8 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <gdiplus.h>
+#include <jxl/encode.h>
+#include <jxl/thread_parallel_runner.h>
 
 #include <iostream>
 #include <string>
@@ -41,17 +43,21 @@ using namespace std::chrono;
 #define IDM_SAVE_TO_FILE 103
 #define IDM_RELOAD    104
 #define IDM_EXIT      105
+#define IDM_TOGGLE_FORMAT 106
 #define WM_TRAY_ICON  (WM_USER + 1)
 #define WM_HOTKEY_REGION 1001
 #define WM_HOTKEY_FULLSCREEN 1002
 
 // 配置结构
+enum class ImageFormat { PNG, JPEGXL };
+
 struct Config {
     std::string regionHotkey = "ctrl+a";
     std::string fullscreenHotkey = "ctrl+shift+a";
     std::string savePath = "Screenshots";
     bool autoStart = false;
     bool saveToFile = true;
+    ImageFormat format = ImageFormat::PNG;
 };
 
 // HDR截图类
@@ -98,7 +104,7 @@ public:
         return SUCCEEDED(hr);
     }
 
-    bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
+    bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "", ImageFormat formatWanted = ImageFormat::PNG) {
         ComPtr<IDXGIResource> resource;
         DXGI_OUTDUPL_FRAME_INFO frameInfo;
 
@@ -152,28 +158,34 @@ public:
 
         return ProcessAndSave(
             static_cast<uint8_t*>(mapped.pData), width, height,
-            mapped.RowPitch, desc.Format, filename);
+            mapped.RowPitch, desc.Format, filename, formatWanted);
     }
 
-    bool CaptureFullscreen(const std::string& filename = "") {
-        return CaptureRegion(0, 0, screenWidth, screenHeight, filename);
+    bool CaptureFullscreen(const std::string& filename = "", ImageFormat formatWanted = ImageFormat::PNG) {
+        return CaptureRegion(0, 0, screenWidth, screenHeight, filename, formatWanted);
     }
 
 private:
     bool ProcessAndSave(uint8_t* data, int width, int height, int pitch,
-        DXGI_FORMAT format, const std::string& filename) {
+        DXGI_FORMAT format, const std::string& filename, ImageFormat saveFormat) {
 
         std::vector<uint8_t> rgbBuffer(width * height * 3);
+        std::vector<float> hdrBuffer;
+        if (saveFormat == ImageFormat::JPEGXL)
+            hdrBuffer.resize(static_cast<size_t>(width) * height * 3);
 
         switch (format) {
         case DXGI_FORMAT_R16G16B16A16_FLOAT:
-            ProcessHDR16Float(data, rgbBuffer.data(), width, height, pitch);
+            ProcessHDR16Float(data, rgbBuffer.data(),
+                hdrBuffer.empty() ? nullptr : hdrBuffer.data(), width, height, pitch);
             break;
         case DXGI_FORMAT_R10G10B10A2_UNORM:
-            ProcessHDR10(data, rgbBuffer.data(), width, height, pitch);
+            ProcessHDR10(data, rgbBuffer.data(),
+                hdrBuffer.empty() ? nullptr : hdrBuffer.data(), width, height, pitch);
             break;
         default:
-            ProcessSDR(data, rgbBuffer.data(), width, height, pitch);
+            ProcessSDR(data, rgbBuffer.data(),
+                hdrBuffer.empty() ? nullptr : hdrBuffer.data(), width, height, pitch);
             break;
         }
 
@@ -183,37 +195,48 @@ private:
         // 如果需要保存到文件
         bool fileSuccess = true;
         if (!filename.empty()) {
-            fileSuccess = SavePNG(rgbBuffer, width, height, filename);
+            if (saveFormat == ImageFormat::PNG)
+                fileSuccess = SavePNG(rgbBuffer, width, height, filename);
+            else
+                fileSuccess = SaveJXL(hdrBuffer, width, height, filename);
         }
 
         return clipboardSuccess && fileSuccess;
     }
 
-    void ProcessHDR16Float(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
+    void ProcessHDR16Float(uint8_t* src, uint8_t* dst8, float* dstf, int width, int height, int pitch) {
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = reinterpret_cast<uint16_t*>(src + y * pitch);
-            auto* dstRow = dst + y * width * 3;
+            auto* dst8Row = dst8 + y * width * 3;
+            float* dstfRow = dstf ? dstf + static_cast<size_t>(y) * width * 3 : nullptr;
 
             for (int x : std::views::iota(0, width)) {
                 float b = HalfToFloat(srcRow[x * 4 + 0]);
                 float g = HalfToFloat(srcRow[x * 4 + 1]);
                 float r = HalfToFloat(srcRow[x * 4 + 2]);
 
+                if (dstfRow) {
+                    dstfRow[x * 3 + 0] = r;
+                    dstfRow[x * 3 + 1] = g;
+                    dstfRow[x * 3 + 2] = b;
+                }
+
                 r = ACESFilm(r);
                 g = ACESFilm(g);
                 b = ACESFilm(b);
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
+                dst8Row[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
+                dst8Row[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
+                dst8Row[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
             }
         }
     }
 
-    void ProcessHDR10(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
+    void ProcessHDR10(uint8_t* src, uint8_t* dst8, float* dstf, int width, int height, int pitch) {
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = reinterpret_cast<uint32_t*>(src + y * pitch);
-            auto* dstRow = dst + y * width * 3;
+            auto* dst8Row = dst8 + y * width * 3;
+            float* dstfRow = dstf ? dstf + static_cast<size_t>(y) * width * 3 : nullptr;
 
             for (int x : std::views::iota(0, width)) {
                 uint32_t pixel = srcRow[x];
@@ -225,26 +248,43 @@ private:
                 float g = PQToLinear(g10 / 1023.0f);
                 float b = PQToLinear(b10 / 1023.0f);
 
+                if (dstfRow) {
+                    dstfRow[x * 3 + 0] = r;
+                    dstfRow[x * 3 + 1] = g;
+                    dstfRow[x * 3 + 2] = b;
+                }
+
                 r = ACESFilm(r);
                 g = ACESFilm(g);
                 b = ACESFilm(b);
 
-                dstRow[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
-                dstRow[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
+                dst8Row[x * 3 + 0] = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255);
+                dst8Row[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255);
+                dst8Row[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255);
             }
         }
     }
 
-    void ProcessSDR(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
+    void ProcessSDR(uint8_t* src, uint8_t* dst8, float* dstf, int width, int height, int pitch) {
         for (int y : std::views::iota(0, height)) {
             auto* srcRow = src + y * pitch;
-            auto* dstRow = dst + y * width * 3;
+            auto* dst8Row = dst8 + y * width * 3;
+            float* dstfRow = dstf ? dstf + static_cast<size_t>(y) * width * 3 : nullptr;
 
             for (int x : std::views::iota(0, width)) {
-                dstRow[x * 3 + 0] = srcRow[x * 4 + 2]; // R
-                dstRow[x * 3 + 1] = srcRow[x * 4 + 1]; // G
-                dstRow[x * 3 + 2] = srcRow[x * 4 + 0]; // B
+                uint8_t r8 = srcRow[x * 4 + 2];
+                uint8_t g8 = srcRow[x * 4 + 1];
+                uint8_t b8 = srcRow[x * 4 + 0];
+
+                if (dstfRow) {
+                    dstfRow[x * 3 + 0] = r8 / 255.0f;
+                    dstfRow[x * 3 + 1] = g8 / 255.0f;
+                    dstfRow[x * 3 + 2] = b8 / 255.0f;
+                }
+
+                dst8Row[x * 3 + 0] = r8;
+                dst8Row[x * 3 + 1] = g8;
+                dst8Row[x * 3 + 2] = b8;
             }
         }
     }
@@ -307,6 +347,54 @@ private:
             return true;
         }
         return false;
+    }
+
+    bool SaveJXL(std::span<const float> data, int width, int height, const std::string& filename) {
+        JxlEncoder* enc = JxlEncoderCreate(nullptr);
+        if (!enc) return false;
+
+        auto encGuard = [enc](void*) { JxlEncoderDestroy(enc); };
+        std::unique_ptr<void, decltype(encGuard)> guard(reinterpret_cast<void*>(1), encGuard);
+
+        JxlBasicInfo info;
+        JxlEncoderInitBasicInfo(&info);
+        info.xsize = width;
+        info.ysize = height;
+        info.bits_per_sample = 32;
+        info.exponent_bits_per_sample = 8;
+        JxlEncoderSetBasicInfo(enc, &info);
+
+        JxlColorEncoding color;
+        JxlColorEncodingSetToLinearSRGB(&color, /*is_gray=*/false);
+        JxlEncoderSetColorEncoding(enc, &color);
+
+        JxlPixelFormat pixelFormat = {3, JXL_TYPE_FLOAT, JXL_LITTLE_ENDIAN, 0};
+        JxlEncoderFrameSettings* frame = JxlEncoderFrameSettingsCreate(enc, nullptr);
+        JxlEncoderAddImageFrame(frame, &pixelFormat, data.data(), width * sizeof(float) * 3);
+        JxlEncoderCloseInput(enc);
+
+        std::vector<uint8_t> out(64 * 1024);
+        uint8_t* next_out = out.data();
+        size_t avail_out = out.size();
+        for (;;) {
+            JxlEncoderStatus status = JxlEncoderProcessOutput(enc, &next_out, &avail_out);
+            if (status == JXL_ENC_ERROR) return false;
+            if (status == JXL_ENC_SUCCESS) {
+                out.resize(next_out - out.data());
+                break;
+            }
+            if (status == JXL_ENC_NEED_MORE_OUTPUT) {
+                size_t offset = next_out - out.data();
+                out.resize(out.size() * 2);
+                next_out = out.data() + offset;
+                avail_out = out.size() - offset;
+            }
+        }
+
+        std::ofstream file(filename, std::ios::binary);
+        if (!file) return false;
+        file.write(reinterpret_cast<char*>(out.data()), out.size());
+        return file.good();
     }
 
     bool SaveToClipboard(std::span<const uint8_t> data) {
@@ -619,6 +707,8 @@ private:
                 else if (key == "SavePath") config.savePath = value;
                 else if (key == "AutoStart") config.autoStart = (value == "true");
                 else if (key == "SaveToFile") config.saveToFile = (value == "true");
+                else if (key == "Format")
+                    config.format = (value == "jxl" ? ImageFormat::JPEGXL : ImageFormat::PNG);
             }
         }
     }
@@ -630,7 +720,8 @@ private:
             << std::format("FullscreenHotkey={}\n", config.fullscreenHotkey)
             << std::format("SavePath={}\n", config.savePath)
             << std::format("AutoStart={}\n", config.autoStart ? "true" : "false")
-            << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false");
+            << std::format("SaveToFile={}\n", config.saveToFile ? "true" : "false")
+            << std::format("Format={}\n", config.format == ImageFormat::PNG ? "png" : "jxl");
     }
 
     void CreateTrayIcon() {
@@ -689,6 +780,8 @@ private:
             IDM_AUTOSTART, L"开机启动");
         AppendMenu(menu, MF_STRING | (config.saveToFile ? MF_CHECKED : MF_UNCHECKED),
             IDM_SAVE_TO_FILE, L"保存到文件");
+        AppendMenu(menu, MF_STRING | (config.format == ImageFormat::JPEGXL ? MF_CHECKED : MF_UNCHECKED),
+            IDM_TOGGLE_FORMAT, L"使用 JPEG XL");
         AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenu(menu, MF_STRING, IDM_RELOAD, L"重载配置");
         AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
@@ -732,6 +825,11 @@ private:
         SaveConfig();
     }
 
+    void ToggleImageFormat() {
+        config.format = (config.format == ImageFormat::PNG ? ImageFormat::JPEGXL : ImageFormat::PNG);
+        SaveConfig();
+    }
+
     void TakeRegionScreenshot() {
         overlay->Show();
     }
@@ -747,12 +845,13 @@ private:
             std::tm tm;
             localtime_s(&tm, &time_t);
 
-            filename = std::format("{}/screenshot_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}.png",
+            auto ext = config.format == ImageFormat::PNG ? "png" : "jxl";
+            filename = std::format("{}/screenshot_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}.{}",
                 config.savePath, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                tm.tm_hour, tm.tm_min, tm.tm_sec);
+                tm.tm_hour, tm.tm_min, tm.tm_sec, ext);
         }
 
-        if (capture->CaptureFullscreen(filename.value_or(""))) {
+        if (capture->CaptureFullscreen(filename.value_or(""), config.format)) {
             if (config.saveToFile && filename) {
                 auto wpath = std::wstring(filename->begin(), filename->end());
                 auto msg = std::wstring(L"全屏截图已保存:\n") + wpath;
@@ -779,12 +878,13 @@ private:
                 std::tm tm;
                 localtime_s(&tm, &time_t);
 
-                filename = std::format("{}/region_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}.png",
+                auto ext = config.format == ImageFormat::PNG ? "png" : "jxl";
+                filename = std::format("{}/region_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}.{}",
                     config.savePath, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                    tm.tm_hour, tm.tm_min, tm.tm_sec);
+                    tm.tm_hour, tm.tm_min, tm.tm_sec, ext);
             }
 
-            if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""))) {
+            if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""), config.format)) {
                 if (config.saveToFile && filename) {
                     auto wpath = std::wstring(filename->begin(), filename->end());
                     auto msg = std::wstring(L"区域截图已保存:\n") + wpath;
@@ -821,6 +921,9 @@ private:
                 break;
             case IDM_SAVE_TO_FILE:
                 app->ToggleSaveToFile();
+                break;
+            case IDM_TOGGLE_FORMAT:
+                app->ToggleImageFormat();
                 break;
             case IDM_RELOAD:
                 app->LoadConfig();
