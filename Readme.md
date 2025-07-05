@@ -97,6 +97,7 @@ UseACESFilmToneMapping=false
 SDRBrightness=250.0
 FullscreenCurrentMonitor=false
 RegionFullscreenMonitor=true
+CaptureRetryCount=3
 ```
 
 #### 配置说明
@@ -114,6 +115,7 @@ RegionFullscreenMonitor=true
 | `SDRBrightness` | SDR目标亮度(nits) | `250.0` |
 | `FullscreenCurrentMonitor` | 全屏截图时仅截取指针所在显示器 | `false` |
 | `RegionFullscreenMonitor` | 全屏程序下按区域截图时截取当前显示器 | `true` |
+| `CaptureRetryCount` | 截图失败时的重试次数 | `3` |
 
 ### 热键格式
 

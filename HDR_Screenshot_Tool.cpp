@@ -27,6 +27,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cwchar>
+#include <thread>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -63,6 +64,7 @@ struct Config {
         float sdrBrightness = 250.0f;       // SDR目标亮度
         bool fullscreenCurrentMonitor = false; // 仅截取指针所在显示器
         bool regionFullscreenMonitor = true;   // 全屏程序下区域截图是否截取当前显示器
+        int captureRetryCount = 3;             // 截图失败重试次数
 };
 
 // HDR截图类
@@ -1170,6 +1172,7 @@ private:
                                 else if (key == "SDRBrightness") config.sdrBrightness = std::stof(value);
                                 else if (key == "FullscreenCurrentMonitor") config.fullscreenCurrentMonitor = (value == "true");
                                 else if (key == "RegionFullscreenMonitor") config.regionFullscreenMonitor = (value == "true");
+                                else if (key == "CaptureRetryCount") config.captureRetryCount = std::clamp(std::stoi(value), 1, 10);
                         }
                 }
         }
@@ -1190,7 +1193,8 @@ private:
                         << std::format("UseACESFilmToneMapping={}\n", config.useACESFilmToneMapping ? "true" : "false")
                         << std::format("SDRBrightness={}\n", config.sdrBrightness)
                         << std::format("\nFullscreenCurrentMonitor={}\n", config.fullscreenCurrentMonitor ? "true" : "false")
-                        << std::format("\nRegionFullscreenMonitor={}\n", config.regionFullscreenMonitor ? "true" : "false");
+                        << std::format("\nRegionFullscreenMonitor={}\n", config.regionFullscreenMonitor ? "true" : "false")
+                        << std::format("\nCaptureRetryCount={}\n", config.captureRetryCount);
         }
 
 	void CreateTrayIcon() {
@@ -1251,7 +1255,13 @@ private:
                 RECT wrect{};
                 if (!GetWindowRect(fg, &wrect)) return false;
 
-                if (wrect.left <= mi.rcMonitor.left && wrect.top <= mi.rcMonitor.top &&
+                LONG style = GetWindowLong(fg, GWL_STYLE);
+                LONG exStyle = GetWindowLong(fg, GWL_EXSTYLE);
+                bool hasDecoration = style & (WS_CAPTION | WS_THICKFRAME);
+                bool isTopmost = exStyle & WS_EX_TOPMOST;
+
+                if (!hasDecoration && isTopmost &&
+                        wrect.left <= mi.rcMonitor.left && wrect.top <= mi.rcMonitor.top &&
                         wrect.right >= mi.rcMonitor.right && wrect.bottom >= mi.rcMonitor.bottom) {
                         rect = mi.rcMonitor;
                         return true;
@@ -1338,10 +1348,20 @@ private:
 	}
 
 
-	void ToggleSaveToFile() {
-		config.saveToFile = !config.saveToFile;
-		SaveConfig();
-	}
+        void ToggleSaveToFile() {
+                config.saveToFile = !config.saveToFile;
+                SaveConfig();
+        }
+
+        template<class F>
+        bool TryCapture(F&& func) {
+                int retries = std::max(1, config.captureRetryCount);
+                for (int i = 0; i < retries; ++i) {
+                        if (func()) return true;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                return false;
+        }
 
         void TakeRegionScreenshot() {
                 RECT full;
@@ -1361,7 +1381,7 @@ private:
 
                         int w = full.right - full.left;
                         int h = full.bottom - full.top;
-                        if (capture->CaptureRegion(full.left, full.top, w, h, filename.value_or(""))) {
+                        if (TryCapture([&] { return capture->CaptureRegion(full.left, full.top, w, h, filename.value_or("")); })) {
                                 if (config.saveToFile && filename) {
                                         ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                                 } else {
@@ -1398,12 +1418,12 @@ private:
                                 if (PtInRect(&m.desktopRect, pt)) {
                                         int w = m.desktopRect.right - m.desktopRect.left;
                                         int h = m.desktopRect.bottom - m.desktopRect.top;
-                                        success = capture->CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or(""));
+                                        success = TryCapture([&] { return capture->CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or("") ); });
                                         break;
                                 }
                         }
                 } else {
-                        success = capture->CaptureFullscreen(filename.value_or(""));
+                        success = TryCapture([&] { return capture->CaptureFullscreen(filename.value_or("")); });
                 }
 
                 if (success) {
@@ -1442,13 +1462,13 @@ private:
 
                         int globalLeft = rect.left + capture->GetVirtualLeft();
                         int globalTop = rect.top + capture->GetVirtualTop();
-                        if (capture->CaptureRegion(globalLeft, globalTop, width, height, filename.value_or(""))) {
-				if (config.saveToFile && filename) {
-					ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
-				}
-				else {
-					ShowNotification(L"截图已复制到剪贴板");
-				}
+                        if (TryCapture([&] { return capture->CaptureRegion(globalLeft, globalTop, width, height, filename.value_or("")); })) {
+                                if (config.saveToFile && filename) {
+                                        ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
+                                }
+                                else {
+                                        ShowNotification(L"截图已复制到剪贴板");
+                                }
 			}
 			else {
 				ShowNotification(L"截图失败");
