@@ -1229,17 +1229,17 @@ private:
                 std::tm tm;
                 localtime_s(&tm, &time_t);
 
-                filename = std::format("{}/region_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}.png",
+                filename = std::format("{}/screenshot_{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}.png",
                     config.savePath, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                     tm.tm_hour, tm.tm_min, tm.tm_sec);
             }
 
             if (capture->CaptureRegion(rect.left, rect.top, width, height, filename.value_or(""))) {
                 if (config.saveToFile && filename) {
-                    ShowNotification(L"区域截图已保存", std::wstring(filename->begin(), filename->end()));
+                    ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                 }
                 else {
-                    ShowNotification(L"区域截图已复制到剪贴板");
+                    ShowNotification(L"截图已复制到剪贴板");
                 }
             }
             else {
