@@ -1,49 +1,61 @@
 #pragma once
 #include "Config.hpp"
 #include "common.hpp"
+
 class HDRScreenCapture {
+public:
+	// 绘制注释的结构
+	struct DrawAnnotation {
+		enum Type { Arrow, Line, Rectangle, Circle } type;
+		POINT start, end;
+		COLORREF color;
+		int thickness;
+	};
+
 private:
-        struct MonitorInfo {
-                ComPtr<IDXGIAdapter1> adapter;
-                ComPtr<IDXGIOutput6> output6;
-                ComPtr<ID3D11Device> device;
-                ComPtr<ID3D11DeviceContext> context;
-                ComPtr<IDXGIOutputDuplication> dupl;
-                RECT desktopRect{};
-                UINT width = 0;
-                UINT height = 0;
-                DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
-        };
-        bool InitMonitor(MonitorInfo& info) {
-                D3D_FEATURE_LEVEL fl;
-                HRESULT hr = D3D11CreateDevice(
-                        info.adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
-                        0, nullptr, 0, D3D11_SDK_VERSION,
-                        &info.device, &fl, &info.context);
-                if (FAILED(hr)) return false;
+	struct MonitorInfo {
+		ComPtr<IDXGIAdapter1> adapter;
+		ComPtr<IDXGIOutput6> output6;
+		ComPtr<ID3D11Device> device;
+		ComPtr<ID3D11DeviceContext> context;
+		ComPtr<IDXGIOutputDuplication> dupl;
+		RECT desktopRect{};
+		UINT width = 0;
+		UINT height = 0;
+		DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
+	};
 
-                DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                hr = info.output6->DuplicateOutput1(info.device.Get(), 0, 1, &fmt, &info.dupl);
-                if (FAILED(hr)) {
-                        hr = info.output6->DuplicateOutput(info.device.Get(), &info.dupl);
-                }
-                if (FAILED(hr)) return false;
+	bool InitMonitor(MonitorInfo& info) {
+		D3D_FEATURE_LEVEL fl;
+		HRESULT hr = D3D11CreateDevice(
+			info.adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+			0, nullptr, 0, D3D11_SDK_VERSION,
+			&info.device, &fl, &info.context);
+		if (FAILED(hr)) return false;
 
-                DXGI_OUTDUPL_DESC dd{};
-                info.dupl->GetDesc(&dd);
-                info.rotation = dd.Rotation;
-                info.width = dd.ModeDesc.Width;
-                info.height = dd.ModeDesc.Height;
+		DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		hr = info.output6->DuplicateOutput1(info.device.Get(), 0, 1, &fmt, &info.dupl);
+		if (FAILED(hr)) {
+			hr = info.output6->DuplicateOutput(info.device.Get(), &info.dupl);
+		}
+		if (FAILED(hr)) return false;
 
-                return true;
-        }
-        std::vector<MonitorInfo> monitors;
-        int virtualLeft = 0;
-        int virtualTop = 0;
-        int virtualWidth = 0;
-        int virtualHeight = 0;
-        bool isHDREnabled = false;
-        const Config* config = nullptr; // 添加配置引用
+		DXGI_OUTDUPL_DESC dd{};
+		info.dupl->GetDesc(&dd);
+		info.rotation = dd.Rotation;
+		info.width = dd.ModeDesc.Width;
+		info.height = dd.ModeDesc.Height;
+
+		return true;
+	}
+
+	std::vector<MonitorInfo> monitors;
+	int virtualLeft = 0;
+	int virtualTop = 0;
+	int virtualWidth = 0;
+	int virtualHeight = 0;
+	bool isHDREnabled = false;
+	const Config* config = nullptr; // 添加配置引用
 
 	// HDR元数据结构
 	struct HDRMetadata {
@@ -53,179 +65,202 @@ private:
 	};
 
 public:
-        void SetConfig(const Config* cfg) { config = cfg; }
-        const std::vector<MonitorInfo>& GetMonitors() const { return monitors; }
-        int GetVirtualLeft() const { return virtualLeft; }
-        int GetVirtualTop() const { return virtualTop; }
-        bool Reinitialize() {
-                monitors.clear();
-                virtualLeft = virtualTop = 0;
-                virtualWidth = virtualHeight = 0;
-                return Initialize();
-        }
-        bool Initialize() {
-                ComPtr<IDXGIFactory1> factory;
-                if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
+	void SetConfig(const Config* cfg) { config = cfg; }
+	const std::vector<MonitorInfo>& GetMonitors() const { return monitors; }
+	int GetVirtualLeft() const { return virtualLeft; }
+	int GetVirtualTop() const { return virtualTop; }
 
-                UINT adapterIndex = 0;
-                RECT virtualRect{ INT_MAX, INT_MAX, INT_MIN, INT_MIN };
-                while (true) {
-                        ComPtr<IDXGIAdapter1> adapter;
-                        if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter))) break;
+	bool Reinitialize() {
+		monitors.clear();
+		virtualLeft = virtualTop = 0;
+		virtualWidth = virtualHeight = 0;
+		return Initialize();
+	}
 
-                        UINT outputIndex = 0;
-                        while (true) {
-                                ComPtr<IDXGIOutput> output;
-                                if (FAILED(adapter->EnumOutputs(outputIndex, &output))) break;
+	bool Initialize() {
+		ComPtr<IDXGIFactory1> factory;
+		if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
 
-                                MonitorInfo info{};
-                                info.adapter = adapter;
-                                if (FAILED(output.As(&info.output6))) { ++outputIndex; continue; }
+		UINT adapterIndex = 0;
+		RECT virtualRect{ INT_MAX, INT_MAX, INT_MIN, INT_MIN };
+		while (true) {
+			ComPtr<IDXGIAdapter1> adapter;
+			if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter))) break;
 
-                                DXGI_OUTPUT_DESC desc;
-                                info.output6->GetDesc(&desc);
-                                info.desktopRect = desc.DesktopCoordinates;
+			UINT outputIndex = 0;
+			while (true) {
+				ComPtr<IDXGIOutput> output;
+				if (FAILED(adapter->EnumOutputs(outputIndex, &output))) break;
 
-                                virtualRect.left = std::min(virtualRect.left, desc.DesktopCoordinates.left);
-                                virtualRect.top = std::min(virtualRect.top, desc.DesktopCoordinates.top);
-                                virtualRect.right = std::max(virtualRect.right, desc.DesktopCoordinates.right);
-                                virtualRect.bottom = std::max(virtualRect.bottom, desc.DesktopCoordinates.bottom);
+				MonitorInfo info{};
+				info.adapter = adapter;
+				if (FAILED(output.As(&info.output6))) { ++outputIndex; continue; }
 
-                                if (InitMonitor(info)) {
-                                        monitors.push_back(std::move(info));
-                                }
+				DXGI_OUTPUT_DESC desc;
+				info.output6->GetDesc(&desc);
+				info.desktopRect = desc.DesktopCoordinates;
 
-                                ++outputIndex;
-                        }
-                        ++adapterIndex;
-                }
+				virtualRect.left = std::min(virtualRect.left, desc.DesktopCoordinates.left);
+				virtualRect.top = std::min(virtualRect.top, desc.DesktopCoordinates.top);
+				virtualRect.right = std::max(virtualRect.right, desc.DesktopCoordinates.right);
+				virtualRect.bottom = std::max(virtualRect.bottom, desc.DesktopCoordinates.bottom);
 
-                if (monitors.empty()) return false;
+				if (InitMonitor(info)) {
+					monitors.push_back(std::move(info));
+				}
 
-                virtualLeft = virtualRect.left;
-                virtualTop = virtualRect.top;
-                virtualWidth = virtualRect.right - virtualRect.left;
-                virtualHeight = virtualRect.bottom - virtualRect.top;
+				++outputIndex;
+			}
+			++adapterIndex;
+		}
 
-                // 检测HDR状态(基于首个显示器)
-                DetectHDRStatus();
+		if (monitors.empty()) return false;
 
-                return true;
-        }
+		virtualLeft = virtualRect.left;
+		virtualTop = virtualRect.top;
+		virtualWidth = virtualRect.right - virtualRect.left;
+		virtualHeight = virtualRect.bottom - virtualRect.top;
 
-       bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
-               RECT regionRect{ x, y, x + width, y + height };
+		// 检测HDR状态(基于首个显示器)
+		DetectHDRStatus();
 
-               DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-               UINT bpp = 0;
-               std::vector<uint8_t> buffer;
-               bool gotFrame = false;
-               bool allSuccess = true;
+		return true;
+	}
 
-                for (auto& m : monitors) {
-                        RECT inter{};
-                        if (!IntersectRect(&inter, &regionRect, &m.desktopRect)) continue;
+	// 公共方法：直接保存RGB数据到文件和剪贴板
+	bool SaveRGBData(const std::vector<uint8_t>& rgbData, int width, int height,
+		const std::string& filename = "", const std::vector<DrawAnnotation>* annotations = nullptr) {
 
-                        ComPtr<IDXGIResource> resource;
-                        DXGI_OUTDUPL_FRAME_INFO frameInfo;
-                       HRESULT hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
-                       if (FAILED(hr)) {
-                               if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_REMOVED) {
-                                       InitMonitor(m);
-                               }
-                               hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
-                       }
-                       if (FAILED(hr)) { allSuccess = false; continue; }
-                       gotFrame = true;
+		std::vector<uint8_t> buffer = rgbData;
 
-                        auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
-                        std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
+		// 如果有绘制注释，添加到图像上
+		if (annotations && !annotations->empty()) {
+			ApplyAnnotationsToRGB(buffer, width, height, *annotations);
+		}
+		bool clipboardSuccess = SaveToClipboard(buffer, width, height);
 
-                        ComPtr<ID3D11Texture2D> texture;
-                        if (FAILED(resource.As(&texture))) continue;
+		bool fileSuccess = true;
+		if (!filename.empty()) {
+			fileSuccess = SavePNG(buffer, width, height, filename);
+		}
 
-                        D3D11_TEXTURE2D_DESC desc{};
-                        texture->GetDesc(&desc);
-                        if (format == DXGI_FORMAT_UNKNOWN) {
-                                format = desc.Format;
-                                bpp = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
-                                buffer.resize(width * height * bpp);
-                        }
+		return clipboardSuccess && fileSuccess;
+	}
 
-                        D3D11_TEXTURE2D_DESC stagingDesc = desc;
-                        stagingDesc.Usage = D3D11_USAGE_STAGING;
-                        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                        stagingDesc.BindFlags = 0;
-                        stagingDesc.MiscFlags = 0;
-                        ComPtr<ID3D11Texture2D> staging;
-                        if (FAILED(m.device->CreateTexture2D(&stagingDesc, nullptr, &staging))) continue;
-                        m.context->CopyResource(staging.Get(), texture.Get());
+	bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "",
+		const std::vector<DrawAnnotation>* annotations = nullptr) {
+		RECT regionRect{ x, y, x + width, y + height };
 
-                        D3D11_MAPPED_SUBRESOURCE mapped{};
-                        if (FAILED(m.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) continue;
+		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+		UINT bpp = 0;
+		std::vector<uint8_t> buffer;
+		bool gotFrame = false;
+		bool allSuccess = true;
 
-                        auto unmap = [&](void*) { m.context->Unmap(staging.Get(), 0); };
-                        std::unique_ptr<void, decltype(unmap)> mapGuard(reinterpret_cast<void*>(1), unmap);
+		for (auto& m : monitors) {
+			RECT inter{};
+			if (!IntersectRect(&inter, &regionRect, &m.desktopRect)) continue;
 
-                        int destX = inter.left - x;
-                        int destY = inter.top - y;
-                        int rw = inter.right - inter.left;
-                        int rh = inter.bottom - inter.top;
+			ComPtr<IDXGIResource> resource;
+			DXGI_OUTDUPL_FRAME_INFO frameInfo;
+			HRESULT hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
+			if (FAILED(hr)) {
+				if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_REMOVED) {
+					InitMonitor(m);
+				}
+				hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
+			}
+			if (FAILED(hr)) { allSuccess = false; continue; }
+			gotFrame = true;
 
-                        int rx0 = inter.left - m.desktopRect.left;
-                        int ry0 = inter.top - m.desktopRect.top;
+			auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
+			std::unique_ptr<void, decltype(cleanup)> frameGuard(reinterpret_cast<void*>(1), cleanup);
 
-                        for (int row = 0; row < rh; ++row) {
-                                for (int col = 0; col < rw; ++col) {
-                                        int rx = rx0 + col;
-                                        int ry = ry0 + row;
+			ComPtr<ID3D11Texture2D> texture;
+			if (FAILED(resource.As(&texture))) continue;
 
-                                        int u = rx, v = ry;
-                                        switch (m.rotation) {
-                                        case DXGI_MODE_ROTATION_ROTATE90:
-                                                u = ry;
-                                                v = static_cast<int>(m.width) - rx - 1;
-                                                break;
-                                        case DXGI_MODE_ROTATION_ROTATE180:
-                                                u = static_cast<int>(m.width) - rx - 1;
-                                                v = static_cast<int>(m.height) - ry - 1;
-                                                break;
-                                        case DXGI_MODE_ROTATION_ROTATE270:
-                                                u = static_cast<int>(m.height) - ry - 1;
-                                                v = rx;
-                                                break;
-                                        default:
-                                                break;
-                                        }
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+			if (format == DXGI_FORMAT_UNKNOWN) {
+				format = desc.Format;
+				bpp = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+				buffer.resize(width * height * bpp);
+			}
 
-                                        const uint8_t* src = static_cast<const uint8_t*>(mapped.pData) + v * mapped.RowPitch + u * bpp;
-                                        uint8_t* dst = buffer.data() + ((destY + row) * width + destX + col) * bpp;
-                                        memcpy(dst, src, bpp);
-                                }
-                        }
-                }
+			D3D11_TEXTURE2D_DESC stagingDesc = desc;
+			stagingDesc.Usage = D3D11_USAGE_STAGING;
+			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			stagingDesc.BindFlags = 0;
+			stagingDesc.MiscFlags = 0;
+			ComPtr<ID3D11Texture2D> staging;
+			if (FAILED(m.device->CreateTexture2D(&stagingDesc, nullptr, &staging))) continue;
+			m.context->CopyResource(staging.Get(), texture.Get());
 
-               if (!gotFrame || !allSuccess ||
-                   std::all_of(buffer.begin(), buffer.end(), [](uint8_t v) { return v == 0; })) {
-                        return false;
-               }
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (FAILED(m.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) continue;
 
-               return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
-        }
+			auto unmap = [&](void*) { m.context->Unmap(staging.Get(), 0); };
+			std::unique_ptr<void, decltype(unmap)> mapGuard(reinterpret_cast<void*>(1), unmap);
 
-        bool CaptureFullscreen(const std::string& filename = "") {
-                return CaptureRegion(virtualLeft, virtualTop, virtualWidth, virtualHeight, filename);
-        }
+			int destX = inter.left - x;
+			int destY = inter.top - y;
+			int rw = inter.right - inter.left;
+			int rh = inter.bottom - inter.top;
+
+			int rx0 = inter.left - m.desktopRect.left;
+			int ry0 = inter.top - m.desktopRect.top;
+
+			for (int row = 0; row < rh; ++row) {
+				for (int col = 0; col < rw; ++col) {
+					int rx = rx0 + col;
+					int ry = ry0 + row;
+
+					int u = rx, v = ry;
+					switch (m.rotation) {
+					case DXGI_MODE_ROTATION_ROTATE90:
+						u = ry;
+						v = static_cast<int>(m.width) - rx - 1;
+						break;
+					case DXGI_MODE_ROTATION_ROTATE180:
+						u = static_cast<int>(m.width) - rx - 1;
+						v = static_cast<int>(m.height) - ry - 1;
+						break;
+					case DXGI_MODE_ROTATION_ROTATE270:
+						u = static_cast<int>(m.height) - ry - 1;
+						v = rx;
+						break;
+					default:
+						break;
+					}
+
+					const uint8_t* src = static_cast<const uint8_t*>(mapped.pData) + v * mapped.RowPitch + u * bpp;
+					uint8_t* dst = buffer.data() + ((destY + row) * width + destX + col) * bpp;
+					memcpy(dst, src, bpp);
+				}
+			}
+		}
+
+		if (!gotFrame || !allSuccess ||
+			std::all_of(buffer.begin(), buffer.end(), [](uint8_t v) { return v == 0; })) {
+			return false;
+		}
+
+		return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename, annotations);
+	}
+
+	bool CaptureFullscreen(const std::string& filename = "") {
+		return CaptureRegion(virtualLeft, virtualTop, virtualWidth, virtualHeight, filename);
+	}
 
 private:
-        void DetectHDRStatus() {
+	void DetectHDRStatus() {
 		// 检测显示器是否支持HDR并已启用
 		DXGI_OUTPUT_DESC1 outputDesc1;
 		isHDREnabled = false; // 默认为false
 
-                if (!monitors.empty()) {
-                        ComPtr<IDXGIOutput6> output6Temp;
-                        if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
+		if (!monitors.empty()) {
+			ComPtr<IDXGIOutput6> output6Temp;
+			if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
 				if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
 					if (GetDebugMode()) {
 						std::ofstream debug("debug.txt", std::ios::app);
@@ -291,9 +326,9 @@ private:
 	HDRMetadata GetDisplayHDRMetadata() {
 		HDRMetadata metadata;
 
-                if (!monitors.empty()) {
-                        ComPtr<IDXGIOutput6> output6Temp;
-                        if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
+		if (!monitors.empty()) {
+			ComPtr<IDXGIOutput6> output6Temp;
+			if (SUCCEEDED(monitors.front().output6.As(&output6Temp))) {
 				DXGI_OUTPUT_DESC1 outputDesc1;
 				if (SUCCEEDED(output6Temp->GetDesc1(&outputDesc1))) {
 					metadata.maxLuminance = outputDesc1.MaxLuminance;
@@ -307,7 +342,8 @@ private:
 	}
 
 	bool ProcessAndSave(uint8_t* data, int width, int height, int pitch,
-		DXGI_FORMAT format, const std::string& filename) {
+		DXGI_FORMAT format, const std::string& filename,
+		const std::vector<DrawAnnotation>* annotations = nullptr) {
 
 		std::vector<uint8_t> rgbBuffer(width * height * 3);
 
@@ -376,6 +412,11 @@ private:
 			}
 		}
 
+		// 如果有绘制注释，添加到图像上
+		if (annotations && !annotations->empty()) {
+			ApplyAnnotations(rgbBuffer, width, height, *annotations);
+		}
+
 		// 保存到剪贴板
 		bool clipboardSuccess = SaveToClipboard(rgbBuffer, width, height);
 
@@ -386,6 +427,203 @@ private:
 		}
 
 		return clipboardSuccess && fileSuccess;
+	}
+
+	// 将注释直接应用到RGB缓冲区
+	void ApplyAnnotationsToRGB(std::vector<uint8_t>& rgbBuffer, int width, int height,
+		const std::vector<DrawAnnotation>& annotations) {
+
+		// 创建一个临时位图来绘制注释
+		HDC hdc = GetDC(nullptr);
+		HDC memDC = CreateCompatibleDC(hdc);
+		HBITMAP bitmap = CreateCompatibleBitmap(hdc, width, height);
+		HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, bitmap);
+
+		// 将RGB数据复制到位图
+		BITMAPINFO bmi = {};
+		bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+		bmi.bmiHeader.biWidth = width;
+		bmi.bmiHeader.biHeight = -height; // 负数表示从上到下
+		bmi.bmiHeader.biPlanes = 1;
+		bmi.bmiHeader.biBitCount = 24;
+		bmi.bmiHeader.biCompression = BI_RGB;
+
+		// 转换RGB到BGR格式用于SetDIBits
+		std::vector<uint8_t> bgrBuffer(width * height * 3);
+		for (int i = 0; i < width * height; i++) {
+			bgrBuffer[i * 3 + 0] = rgbBuffer[i * 3 + 2]; // B
+			bgrBuffer[i * 3 + 1] = rgbBuffer[i * 3 + 1]; // G
+			bgrBuffer[i * 3 + 2] = rgbBuffer[i * 3 + 0]; // R
+		}
+
+		SetDIBits(memDC, bitmap, 0, height, bgrBuffer.data(), &bmi, DIB_RGB_COLORS);
+
+		// 绘制注释
+		for (const auto& annotation : annotations) {
+			HPEN pen = CreatePen(PS_SOLID, annotation.thickness, annotation.color);
+			HPEN oldPen = (HPEN)SelectObject(memDC, pen);
+			HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, GetStockObject(NULL_BRUSH));
+
+			switch (annotation.type) {
+			case DrawAnnotation::Line:
+				MoveToEx(memDC, annotation.start.x, annotation.start.y, nullptr);
+				LineTo(memDC, annotation.end.x, annotation.end.y);
+				break;
+
+			case DrawAnnotation::Rectangle:
+				Rectangle(memDC, annotation.start.x, annotation.start.y,
+					annotation.end.x, annotation.end.y);
+				break;
+
+			case DrawAnnotation::Circle: {
+				int radius = static_cast<int>(sqrt(pow(annotation.end.x - annotation.start.x, 2) +
+					pow(annotation.end.y - annotation.start.y, 2)));
+				Ellipse(memDC, annotation.start.x - radius, annotation.start.y - radius,
+					annotation.start.x + radius, annotation.start.y + radius);
+				break;
+			}
+
+			case DrawAnnotation::Arrow: {
+				// 绘制箭头主体
+				MoveToEx(memDC, annotation.start.x, annotation.start.y, nullptr);
+				LineTo(memDC, annotation.end.x, annotation.end.y);
+
+				// 计算箭头头部
+				double angle = atan2(annotation.end.y - annotation.start.y,
+					annotation.end.x - annotation.start.x);
+				int arrowLength = 15;
+				double arrowAngle = 0.5;
+
+				int x1 = annotation.end.x - arrowLength * cos(angle - arrowAngle);
+				int y1 = annotation.end.y - arrowLength * sin(angle - arrowAngle);
+				int x2 = annotation.end.x - arrowLength * cos(angle + arrowAngle);
+				int y2 = annotation.end.y - arrowLength * sin(angle + arrowAngle);
+
+				MoveToEx(memDC, annotation.end.x, annotation.end.y, nullptr);
+				LineTo(memDC, x1, y1);
+				MoveToEx(memDC, annotation.end.x, annotation.end.y, nullptr);
+				LineTo(memDC, x2, y2);
+				break;
+			}
+			}
+
+			SelectObject(memDC, oldPen);
+			SelectObject(memDC, oldBrush);
+			DeleteObject(pen);
+		}
+
+		// 将绘制结果读回RGB缓冲区
+		GetDIBits(memDC, bitmap, 0, height, bgrBuffer.data(), &bmi, DIB_RGB_COLORS);
+
+		// 转换回RGB格式
+		for (int i = 0; i < width * height; i++) {
+			rgbBuffer[i * 3 + 0] = bgrBuffer[i * 3 + 2]; // R
+			rgbBuffer[i * 3 + 1] = bgrBuffer[i * 3 + 1]; // G
+			rgbBuffer[i * 3 + 2] = bgrBuffer[i * 3 + 0]; // B
+		}
+
+		SelectObject(memDC, oldBitmap);
+		DeleteObject(bitmap);
+		DeleteDC(memDC);
+		ReleaseDC(nullptr, hdc);
+	}
+
+	void ApplyAnnotations(std::vector<uint8_t>& rgbBuffer, int width, int height,
+		const std::vector<DrawAnnotation>& annotations) {
+
+		// 创建一个临时位图来绘制注释
+		HDC hdc = GetDC(nullptr);
+		HDC memDC = CreateCompatibleDC(hdc);
+		HBITMAP bitmap = CreateCompatibleBitmap(hdc, width, height);
+		HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, bitmap);
+
+		// 将RGB数据复制到位图
+		BITMAPINFO bmi = {};
+		bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+		bmi.bmiHeader.biWidth = width;
+		bmi.bmiHeader.biHeight = -height; // 负数表示从上到下
+		bmi.bmiHeader.biPlanes = 1;
+		bmi.bmiHeader.biBitCount = 24;
+		bmi.bmiHeader.biCompression = BI_RGB;
+
+		// 转换RGB到BGR格式用于SetDIBits
+		std::vector<uint8_t> bgrBuffer(width * height * 3);
+		for (int i = 0; i < width * height; i++) {
+			bgrBuffer[i * 3 + 0] = rgbBuffer[i * 3 + 2]; // B
+			bgrBuffer[i * 3 + 1] = rgbBuffer[i * 3 + 1]; // G
+			bgrBuffer[i * 3 + 2] = rgbBuffer[i * 3 + 0]; // R
+		}
+
+		SetDIBits(memDC, bitmap, 0, height, bgrBuffer.data(), &bmi, DIB_RGB_COLORS);
+
+		// 绘制注释
+		for (const auto& annotation : annotations) {
+			HPEN pen = CreatePen(PS_SOLID, annotation.thickness, annotation.color);
+			HPEN oldPen = (HPEN)SelectObject(memDC, pen);
+			HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, GetStockObject(NULL_BRUSH));
+
+			switch (annotation.type) {
+			case DrawAnnotation::Line:
+				MoveToEx(memDC, annotation.start.x, annotation.start.y, nullptr);
+				LineTo(memDC, annotation.end.x, annotation.end.y);
+				break;
+
+			case DrawAnnotation::Rectangle:
+				Rectangle(memDC, annotation.start.x, annotation.start.y,
+					annotation.end.x, annotation.end.y);
+				break;
+
+			case DrawAnnotation::Circle: {
+				int radius = static_cast<int>(sqrt(pow(annotation.end.x - annotation.start.x, 2) +
+					pow(annotation.end.y - annotation.start.y, 2)));
+				Ellipse(memDC, annotation.start.x - radius, annotation.start.y - radius,
+					annotation.start.x + radius, annotation.start.y + radius);
+				break;
+			}
+
+			case DrawAnnotation::Arrow: {
+				// 绘制箭头主体
+				MoveToEx(memDC, annotation.start.x, annotation.start.y, nullptr);
+				LineTo(memDC, annotation.end.x, annotation.end.y);
+
+				// 计算箭头头部
+				double angle = atan2(annotation.end.y - annotation.start.y,
+					annotation.end.x - annotation.start.x);
+				int arrowLength = 15;
+				double arrowAngle = 0.5;
+
+				int x1 = annotation.end.x - arrowLength * cos(angle - arrowAngle);
+				int y1 = annotation.end.y - arrowLength * sin(angle - arrowAngle);
+				int x2 = annotation.end.x - arrowLength * cos(angle + arrowAngle);
+				int y2 = annotation.end.y - arrowLength * sin(angle + arrowAngle);
+
+				MoveToEx(memDC, annotation.end.x, annotation.end.y, nullptr);
+				LineTo(memDC, x1, y1);
+				MoveToEx(memDC, annotation.end.x, annotation.end.y, nullptr);
+				LineTo(memDC, x2, y2);
+				break;
+			}
+			}
+
+			SelectObject(memDC, oldPen);
+			SelectObject(memDC, oldBrush);
+			DeleteObject(pen);
+		}
+
+		// 将绘制结果读回RGB缓冲区
+		GetDIBits(memDC, bitmap, 0, height, bgrBuffer.data(), &bmi, DIB_RGB_COLORS);
+
+		// 转换回RGB格式
+		for (int i = 0; i < width* height; i++) {
+			rgbBuffer[i * 3 + 0] = bgrBuffer[i * 3 + 2]; // R
+			rgbBuffer[i * 3 + 1] = bgrBuffer[i * 3 + 1]; // G
+			rgbBuffer[i * 3 + 2] = bgrBuffer[i * 3 + 0]; // B
+		}
+
+		SelectObject(memDC, oldBitmap);
+		DeleteObject(bitmap);
+		DeleteDC(memDC);
+		ReleaseDC(nullptr, hdc);
 	}
 
 	void ProcessHDR16Float(uint8_t* src, uint8_t* dst, int width, int height, int pitch) {
@@ -432,7 +670,6 @@ private:
 			}
 		}
 	}
-
 
 	bool GetDebugMode() const {
 		return config ? config->debugMode : false;

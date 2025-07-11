@@ -127,6 +127,13 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="common.hpp" />
+    <ClInclude Include="Config.hpp" />
+    <ClInclude Include="HDRScreenCapture.hpp" />
+    <ClInclude Include="ScreenshotApp.hpp" />
+    <ClInclude Include="SelectionOverlay.hpp" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

@@ -1,5 +1,6 @@
 #include "ScreenshotApp.hpp"
 #include "common.hpp"
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
 	// 防止多实例运行
 	auto hMutex = CreateMutex(nullptr, TRUE, L"HDRScreenshotTool_Mutex");
