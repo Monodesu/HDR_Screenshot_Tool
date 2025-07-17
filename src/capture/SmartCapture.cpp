@@ -63,7 +63,10 @@ namespace screenshot_tool {
             
             if (result == CaptureResult::Success) {
                 // HDR 转 SDR，传递 HDR 状态和配置
-                bool isHDR = dxgi_.IsHDREnabled();
+                // 只有在实际获取到HDR格式数据时才进行HDR处理
+                bool isHDR = dxgi_.IsHDREnabled() && 
+                            (fmt == DXGI_FORMAT_R16G16B16A16_FLOAT || 
+                             fmt == DXGI_FORMAT_R10G10B10A2_UNORM);
                 PixelConvert::ToSRGB8(fmt, outRGB8, isHDR, cfg_);
                 return true;
             }
@@ -86,12 +89,124 @@ namespace screenshot_tool {
     }
 
     RECT SmartCapture::GetVirtualDesktop() const {
+        // 优先使用DXGI计算的虚拟桌面，fallback到GetSystemMetrics
+        if (dxgi_.IsInitialized()) {
+            return dxgi_.GetVirtualRect();
+        }
+        
+        // GDI fallback
         return RECT{ 
             GetSystemMetrics(SM_XVIRTUALSCREEN),
             GetSystemMetrics(SM_YVIRTUALSCREEN),
             GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
             GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN)
         };
+    }
+
+    bool SmartCapture::CaptureFullscreenToCache() {
+        RECT vr = GetVirtualDesktop();
+        int w = vr.right - vr.left;
+        int h = vr.bottom - vr.top;
+        
+        cachedFullscreen_ = {};
+        cachedFormat_ = DXGI_FORMAT_UNKNOWN;
+        hasCachedData_ = false;
+        
+        // 优先尝试 DXGI 捕获全屏原始数据
+        if (dxgi_.IsInitialized()) {
+            CaptureResult result = dxgi_.CaptureRegion(vr.left, vr.top, w, h, cachedFormat_, cachedFullscreen_);
+            
+            if (result == CaptureResult::Success) {
+                hasCachedData_ = true;
+                Logger::Info(L"Cached fullscreen data via DXGI: {}x{}, format: {}", w, h, static_cast<int>(cachedFormat_));
+                return true;
+            }
+            else if (result == CaptureResult::NeedsReinitialization) {
+                Logger::Warn(L"DXGI needs reinitialization for cache");
+                dxgi_.Reinitialize();
+            }
+        }
+        
+        // GDI fallback - 直接获取 RGB8 格式
+        if (gdi_.CaptureRegion(vr.left, vr.top, w, h, cachedFullscreen_)) {
+            cachedFormat_ = DXGI_FORMAT_B8G8R8A8_UNORM; // GDI 输出的是 RGB8
+            hasCachedData_ = true;
+            Logger::Info(L"Cached fullscreen data via GDI: {}x{}", w, h);
+            return true;
+        }
+        
+        Logger::Error(L"Failed to cache fullscreen data");
+        return false;
+    }
+
+    SmartCapture::Result SmartCapture::ExtractRegionFromCache(HWND hwnd, const RECT& r, const wchar_t* savePath) {
+        if (!hasCachedData_) {
+            Logger::Error(L"No cached data available for region extraction");
+            return Result::Failed;
+        }
+        
+        RECT vr = GetVirtualDesktop();
+        int cacheWidth = vr.right - vr.left;
+        int cacheHeight = vr.bottom - vr.top;
+        
+        // 计算区域在缓存中的位置
+        int regionX = r.left - vr.left;
+        int regionY = r.top - vr.top;
+        int regionW = r.right - r.left;
+        int regionH = r.bottom - r.top;
+        
+        // 边界检查
+        if (regionX < 0 || regionY < 0 || 
+            regionX + regionW > cacheWidth || regionY + regionH > cacheHeight) {
+            Logger::Error(L"Region out of cached bounds");
+            return Result::Failed;
+        }
+        
+        // 从缓存中提取区域数据
+        ImageBuffer regionBuffer;
+        regionBuffer.format = cachedFullscreen_.format;
+        regionBuffer.width = regionW;
+        regionBuffer.height = regionH;
+        
+        int pixelSize = (cachedFullscreen_.format == PixelFormat::RGBA_F16) ? 8 : 
+                       (cachedFullscreen_.format == PixelFormat::RGBA10A2) ? 4 : 
+                       (cachedFullscreen_.format == PixelFormat::BGRA8) ? 4 : 3;
+        
+        regionBuffer.stride = regionW * pixelSize;
+        regionBuffer.data.resize(regionBuffer.stride * regionH);
+        
+        // 逐行复制区域数据
+        for (int y = 0; y < regionH; ++y) {
+            const uint8_t* srcRow = cachedFullscreen_.data.data() + 
+                                   (regionY + y) * cachedFullscreen_.stride + 
+                                   regionX * pixelSize;
+            uint8_t* dstRow = regionBuffer.data.data() + y * regionBuffer.stride;
+            memcpy(dstRow, srcRow, regionBuffer.stride);
+        }
+        
+        // 处理 HDR 转换
+        // 注意：如果使用GDI fallback捕获的数据，即使显示器支持HDR，数据也是SDR的
+        bool isHDR = dxgi_.IsHDREnabled() && 
+                    (cachedFormat_ == DXGI_FORMAT_R16G16B16A16_FLOAT || 
+                     cachedFormat_ == DXGI_FORMAT_R10G10B10A2_UNORM);
+        PixelConvert::ToSRGB8(cachedFormat_, regionBuffer, isHDR, cfg_);
+        
+        // 写入剪贴板
+        bool clipboardSuccess = ClipboardWriter::WriteRGB(hwnd, regionBuffer.data.data(), regionW, regionH);
+        if (!clipboardSuccess) {
+            Logger::Warn(L"ClipboardWriter failed");
+        }
+        
+        // PNG 保存（路径为空则不保存）
+        bool fileSuccess = true;
+        if (savePath && *savePath) {
+            fileSuccess = ImageSaverPNG::SaveRGBToPNG(regionBuffer.data.data(), regionW, regionH, savePath);
+            if (!fileSuccess) {
+                Logger::Warn(L"ImageSaverPNG failed");
+            }
+        }
+        
+        return (clipboardSuccess && fileSuccess) ? Result::OK : Result::Failed;
     }
 
 } // namespace screenshot_tool

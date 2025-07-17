@@ -42,6 +42,95 @@ namespace screenshot_tool {
 	static constexpr int HOTKEY_ID_FULLSCREEN = 2;
 
 	// ----------------------------------------------------------------------------
+	// 多显示器支持的工具函数
+	// ----------------------------------------------------------------------------
+	
+	// 获取鼠标当前所在的显示器
+	static RECT getCurrentMonitorRect() {
+		POINT cursorPos;
+		GetCursorPos(&cursorPos);
+		HMONITOR hMonitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONEAREST);
+		
+		MONITORINFO monInfo = { sizeof(MONITORINFO) };
+		if (GetMonitorInfo(hMonitor, &monInfo)) {
+			return monInfo.rcMonitor;
+		}
+		
+		// 如果失败，返回主显示器
+		RECT primaryRect = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+		return primaryRect;
+	}
+	
+	// 获取指定窗口所在的显示器
+	static RECT getWindowMonitorRect(HWND hwnd) {
+		HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+		
+		MONITORINFO monInfo = { sizeof(MONITORINFO) };
+		if (GetMonitorInfo(hMonitor, &monInfo)) {
+			return monInfo.rcMonitor;
+		}
+		
+		// 如果失败，返回主显示器
+		RECT primaryRect = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+		return primaryRect;
+	}
+	
+	// 枚举所有显示器的回调函数
+	struct MonitorEnumData {
+		std::vector<RECT> monitors;
+		RECT targetRect;
+		int bestIndex = -1;
+		int minDistance = INT_MAX;
+	};
+	
+	static BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+		MonitorEnumData* data = reinterpret_cast<MonitorEnumData*>(dwData);
+		
+		MONITORINFO monInfo = { sizeof(MONITORINFO) };
+		if (GetMonitorInfo(hMonitor, &monInfo)) {
+			data->monitors.push_back(monInfo.rcMonitor);
+			
+			// 计算与目标区域的距离（用于找到最近的显示器）
+			RECT intersection;
+			if (IntersectRect(&intersection, &monInfo.rcMonitor, &data->targetRect)) {
+				// 如果有交集，这是最好的选择
+				data->bestIndex = static_cast<int>(data->monitors.size()) - 1;
+				data->minDistance = 0;
+			} else {
+				// 计算中心点距离
+				int monCenterX = (monInfo.rcMonitor.left + monInfo.rcMonitor.right) / 2;
+				int monCenterY = (monInfo.rcMonitor.top + monInfo.rcMonitor.bottom) / 2;
+				int targetCenterX = (data->targetRect.left + data->targetRect.right) / 2;
+				int targetCenterY = (data->targetRect.top + data->targetRect.bottom) / 2;
+				
+				int distance = abs(monCenterX - targetCenterX) + abs(monCenterY - targetCenterY);
+				if (distance < data->minDistance) {
+					data->minDistance = distance;
+					data->bestIndex = static_cast<int>(data->monitors.size()) - 1;
+				}
+			}
+		}
+		
+		return TRUE;
+	}
+	
+	// 根据区域找到最合适的显示器
+	static RECT getBestMonitorForRect(const RECT& rect) {
+		MonitorEnumData enumData;
+		enumData.targetRect = rect;
+		
+		EnumDisplayMonitors(nullptr, nullptr, MonitorEnumProc, reinterpret_cast<LPARAM>(&enumData));
+		
+		if (enumData.bestIndex >= 0 && enumData.bestIndex < enumData.monitors.size()) {
+			return enumData.monitors[enumData.bestIndex];
+		}
+		
+		// 如果失败，返回主显示器
+		RECT primaryRect = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+		return primaryRect;
+	}
+
+	// ----------------------------------------------------------------------------
 	// 确保屏幕截图保存目录存在，若不存在则自动创建
 	// ----------------------------------------------------------------------------
 	static std::wstring ensureSaveDir(const Config& cfg) {
@@ -140,6 +229,11 @@ namespace screenshot_tool {
 		// 8) 自动启动设置为 true
 		applyAutoStart();
 
+		// 9) 初始化显示配置监控
+		lastDisplayWidth_ = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+		lastDisplayHeight_ = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+		lastDisplayChangeTime_ = GetTickCount();
+
 		running_ = true;
 		return true;
 	}
@@ -186,6 +280,16 @@ namespace screenshot_tool {
 			cfg_.autoStart = !cfg_.autoStart;
 			applyAutoStart();
 			break;
+		case TrayMenuId::IDM_TRAY_TOGGLE_FULLSCREEN_CURRENT_MONITOR:
+			cfg_.fullscreenCurrentMonitor = !cfg_.fullscreenCurrentMonitor;
+			SaveConfig(cfg_, L"config.ini");
+			Logger::Info(L"Fullscreen current monitor: {}", cfg_.fullscreenCurrentMonitor ? L"enabled" : L"disabled");
+			break;
+		case TrayMenuId::IDM_TRAY_TOGGLE_REGION_FULLSCREEN_MONITOR:
+			cfg_.regionFullscreenMonitor = !cfg_.regionFullscreenMonitor;
+			SaveConfig(cfg_, L"config.ini");
+			Logger::Info(L"Region fullscreen monitor: {}", cfg_.regionFullscreenMonitor ? L"enabled" : L"disabled");
+			break;
 		case TrayMenuId::IDM_TRAY_EXIT:
 			PostMessage(hwnd_, WM_CLOSE, 0, 0);
 			break;
@@ -201,16 +305,70 @@ namespace screenshot_tool {
 			Logger::Warn(L"Region overlay invalid");
 			return;
 		}
-		overlay_.BeginSelect();
+		
+		// 确保捕获系统就绪，检测显示配置变化
+		if (!ensureCaptureReady()) {
+			Logger::Error(L"Failed to ensure capture system ready");
+			return;
+		}
+		
+		// 根据配置决定区域选择的范围
+		RECT overlayRect;
+		if (cfg_.regionFullscreenMonitor) {
+			// 限制在当前显示器上进行区域选择
+			overlayRect = getCurrentMonitorRect();
+			Logger::Info(L"Region selection: limited to current monitor only {}x{} at ({}, {})", 
+			            overlayRect.right - overlayRect.left, 
+			            overlayRect.bottom - overlayRect.top,
+			            overlayRect.left, overlayRect.top);
+		} else {
+			// 在整个虚拟桌面上进行区域选择（支持跨显示器）
+			overlayRect = capture_.GetVirtualDesktop();
+			Logger::Info(L"Region selection: cross-monitor support on virtual desktop {}x{} at ({}, {})",
+			            overlayRect.right - overlayRect.left, 
+			            overlayRect.bottom - overlayRect.top,
+			            overlayRect.left, overlayRect.top);
+		}
+		
+		// 先捕获相应区域的数据到缓存（确保overlay不在屏幕上）
+		// 在捕获前确保没有任何overlay窗口可见
+		if (!capture_.CaptureFullscreenToCache()) {
+			Logger::Error(L"Failed to cache fullscreen for region selection");
+			return;
+		}
+		
+		// 然后显示 overlay 进行区域选择
+		// 如果支持多显示器区域选择，可以传递overlayRect给overlay
+		if (cfg_.regionFullscreenMonitor) {
+            overlay_.BeginSelectOnMonitor(overlayRect);
+        } else {
+            overlay_.BeginSelect();
+        }
 	}
 
 	// ----------------------------------------------------------------------------
 	// 全屏截图
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::doCaptureFullscreen() {
-		// TODO: 实现捕获当前显示器或整个屏幕
-		RECT vr = capture_.GetVirtualDesktop();
-		CaptureRect(vr); // 暂时使用相同接口，后续扩展
+		RECT captureRect;
+		
+		if (cfg_.fullscreenCurrentMonitor) {
+			// 仅捕获鼠标当前所在的显示器
+			captureRect = getCurrentMonitorRect();
+			Logger::Info(L"Fullscreen capture: current monitor only {}x{} at ({}, {})", 
+			            captureRect.right - captureRect.left, 
+			            captureRect.bottom - captureRect.top,
+			            captureRect.left, captureRect.top);
+		} else {
+			// 捕获整个虚拟桌面（所有显示器）
+			captureRect = capture_.GetVirtualDesktop();
+			Logger::Info(L"Fullscreen capture: all monitors (virtual desktop) {}x{} at ({}, {})", 
+			            captureRect.right - captureRect.left, 
+			            captureRect.bottom - captureRect.top,
+			            captureRect.left, captureRect.top);
+		}
+		
+		CaptureRect(captureRect);
 	}
 
 	// ----------------------------------------------------------------------------
@@ -234,7 +392,8 @@ namespace screenshot_tool {
 		}
 		fullPath += filename;
 
-		SmartCapture::Result res = capture_.CaptureToFileAndClipboard(hwnd_, r, cfg_.saveToFile ? fullPath.c_str() : nullptr);
+		// 使用冻结帧数据进行区域提取
+		SmartCapture::Result res = capture_.ExtractRegionFromCache(hwnd_, r, cfg_.saveToFile ? fullPath.c_str() : nullptr);
 		switch (res) {
 		case SmartCapture::Result::OK:
 			if (cfg_.showNotification) {
@@ -252,6 +411,39 @@ namespace screenshot_tool {
 			}
 			break;
 		}
+	}
+
+	// ----------------------------------------------------------------------------
+	// 确保捕获系统就绪，检测显示配置变化
+	// ----------------------------------------------------------------------------
+	bool ScreenshotApp::ensureCaptureReady() {
+		// 检查显示配置是否发生变化
+		UINT currentWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+		UINT currentHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+		DWORD currentTime = GetTickCount();
+		
+		bool displayChanged = (currentWidth != lastDisplayWidth_ || 
+		                      currentHeight != lastDisplayHeight_);
+		
+		if (displayChanged) {
+			Logger::Info(L"Display configuration changed: {}x{} -> {}x{}", 
+			            lastDisplayWidth_, lastDisplayHeight_, 
+			            currentWidth, currentHeight);
+			
+			lastDisplayWidth_ = currentWidth;
+			lastDisplayHeight_ = currentHeight;
+			lastDisplayChangeTime_ = currentTime;
+			
+			// 显示配置变化，强制重新初始化
+			return capture_.Initialize();
+		}
+		
+		// 检查是否需要重新初始化
+		if (!capture_.Initialize()) {
+			Logger::Warn(L"Capture initialization failed, will rely on fallback");
+		}
+		
+		return true;
 	}
 
 	// ----------------------------------------------------------------------------
@@ -317,18 +509,29 @@ namespace screenshot_tool {
 				doCaptureRegion();
 			}
 			else if (lParam == WM_RBUTTONUP) {
-				HMENU menu = CreatePopupMenu();
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_REGION, L"区域截图");
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_FULLSCREEN, L"全屏截图");
-				AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_OPEN_FOLDER, L"打开保存目录");
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART, cfg_.autoStart ? L"取消开机启动" : L"设置开机启动");
-				AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_EXIT, L"退出");
-				POINT pt; GetCursorPos(&pt);
-				SetForegroundWindow(hWnd);
-				TrackPopupMenu(menu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, nullptr);
-				DestroyMenu(menu);
+                HMENU menu = CreatePopupMenu();
+                AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_REGION, L"区域截图");
+                AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_FULLSCREEN, L"全屏截图");
+                AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
+                
+                // 多显示器选项子菜单
+                HMENU multiMonitorMenu = CreatePopupMenu();
+                AppendMenu(multiMonitorMenu, MF_STRING | (cfg_.fullscreenCurrentMonitor ? MF_CHECKED : MF_UNCHECKED), 
+                          TrayMenuId::IDM_TRAY_TOGGLE_FULLSCREEN_CURRENT_MONITOR, L"全屏截图仅当前显示器");
+                AppendMenu(multiMonitorMenu, MF_STRING | (cfg_.regionFullscreenMonitor ? MF_CHECKED : MF_UNCHECKED), 
+                          TrayMenuId::IDM_TRAY_TOGGLE_REGION_FULLSCREEN_MONITOR, L"区域选择限制当前显示器");
+                AppendMenu(menu, MF_POPUP, (UINT_PTR)multiMonitorMenu, L"多显示器设置");
+                
+                AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
+                AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_OPEN_FOLDER, L"打开保存目录");
+                AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART, cfg_.autoStart ? L"取消开机启动" : L"设置开机启动");
+                AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
+                AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_EXIT, L"退出");
+                POINT pt; GetCursorPos(&pt);
+                SetForegroundWindow(hWnd);
+                TrackPopupMenu(menu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, nullptr);
+                DestroyMenu(multiMonitorMenu);
+                DestroyMenu(menu);
 			}
 			return 0;
 		}

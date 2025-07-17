@@ -90,6 +90,7 @@ namespace screenshot_tool {
         info.dupl.Reset();
         info.context.Reset();
         info.device.Reset();
+        
 
         D3D_FEATURE_LEVEL fl;
         HRESULT hr = D3D11CreateDevice(

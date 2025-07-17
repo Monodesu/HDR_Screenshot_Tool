@@ -25,8 +25,8 @@ namespace screenshot_tool {
         float       sdrBrightness = 250.0f;                // SDR 映射目标峰值亮度 (nit)
 
         // 多显示器行为
-        bool        fullscreenCurrentMonitor = false;      // 全屏默认当前监视器
-        bool        regionFullscreenMonitor = true;        // 区域内自动按监视器裁剪
+        bool        fullscreenCurrentMonitor = false;      // true: 全屏截图当前显示器，false: 所有显示器
+        bool        regionFullscreenMonitor = false;       // true: 区域选择限制当前显示器，false: 跨显示器选择
 
         // 捕获
         int         captureRetryCount = 3;                 // DXGI 重试次数

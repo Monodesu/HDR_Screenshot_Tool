@@ -28,6 +28,10 @@ namespace screenshot_tool {
         Result CaptureToFileAndClipboard(HWND hwnd, const RECT& r, const wchar_t* savePath);
         Result CaptureFullscreen(HWND hwnd, const RECT& virtualRect, const wchar_t* savePath);
         
+        // ---- 冻结帧区域截图 -----------------------------------------------------
+        bool CaptureFullscreenToCache();  // 捕获全屏到缓存
+        Result ExtractRegionFromCache(HWND hwnd, const RECT& r, const wchar_t* savePath);  // 从缓存提取区域
+        
         // ---- 工具方法 -----------------------------------------------------------
         RECT GetVirtualDesktop() const;
 
@@ -39,6 +43,11 @@ namespace screenshot_tool {
         Config* cfg_ = nullptr;
         DXGICapture  dxgi_;
         GDICapture   gdi_;
+        
+        // 冻结帧缓存
+        ImageBuffer cachedFullscreen_;
+        DXGI_FORMAT cachedFormat_ = DXGI_FORMAT_UNKNOWN;
+        bool hasCachedData_ = false;
     };
 
 } // namespace screenshot_tool

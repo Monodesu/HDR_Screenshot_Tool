@@ -18,8 +18,8 @@ namespace screenshot_tool {
         ~ScreenshotApp();
 
         bool Initialize(HINSTANCE hInst);
-        int  Run();       // ---- ��Ϣѭ�� -------------------------------------------------------------
-        void Shutdown();  // ---- Ӧ���������� ---------------------------------------------------------
+        int  Run();       // ---- ��Ϣѭ�� -------------------------------------------------------------
+        void Shutdown();  // ---- Ӧ���������� ---------------------------------------------------------
 
     private:
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -31,6 +31,7 @@ namespace screenshot_tool {
         void onRegionSelected(const RECT& r);
         void applyAutoStart();
         void CaptureRect(const RECT& r);
+        bool ensureCaptureReady(); // 确保捕获系统就绪，检测显示配置变化
 
         HINSTANCE      hInst_ = nullptr;
         HWND           hwnd_ = nullptr;
@@ -41,6 +42,11 @@ namespace screenshot_tool {
         Config         cfg_;
         SmartCapture   capture_;
         bool           running_ = false;
+        
+        // 显示配置监控
+        UINT           lastDisplayWidth_ = 0;
+        UINT           lastDisplayHeight_ = 0;
+        DWORD          lastDisplayChangeTime_ = 0;
     };
 
 } // namespace screenshot_tool

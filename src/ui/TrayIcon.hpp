@@ -6,13 +6,15 @@
 
 namespace screenshot_tool {
 
-    // �˵��� ID
+    // 菜单项 ID
     enum TrayMenuId : UINT {
         IDM_TRAY_CAPTURE_REGION = 1000,
         IDM_TRAY_CAPTURE_FULLSCREEN,
         IDM_TRAY_OPEN_FOLDER,
         IDM_TRAY_TOGGLE_AUTOSTART,
         IDM_TRAY_TOGGLE_SAVEFILE,
+        IDM_TRAY_TOGGLE_FULLSCREEN_CURRENT_MONITOR,
+        IDM_TRAY_TOGGLE_REGION_FULLSCREEN_MONITOR,
         IDM_TRAY_EXIT
     };
 
