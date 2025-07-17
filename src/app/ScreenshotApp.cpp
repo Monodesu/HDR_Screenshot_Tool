@@ -20,27 +20,25 @@
 #include <cassert>
 
 // ============================================================================
-// ���س��� & ��
+// 初始化窗口 & 资源
 // ============================================================================
 namespace screenshot_tool {
 
-	// �Զ�������ͼ����Ϣ ID
+	// 自定义消息 ID
 	static constexpr UINT WM_ST_TRAYICON = WM_APP + 1;
-	// �Զ��� Overlay �� App ͨ�ţ�Overlay ���ѡ��ʱ PostMessage��
 	static constexpr UINT WM_ST_REGION_DONE = WM_APP + 2;
 
-
-	// �ȼ� ID���� HotkeyManager �ڲ�����һ�»�ӳ�䣩
+	// 热键 ID（与 HotkeyManager 内部映射一致）
 	static constexpr int HOTKEY_ID_REGION = 1;
 	static constexpr int HOTKEY_ID_FULLSCREEN = 2;
 
 	// ----------------------------------------------------------------------------
-	// ���ߣ�������Ļ��ͼ����Ŀ¼��������������Զ�������
+	// 确保屏幕截图保存目录存在，若不存在则自动创建
 	// ----------------------------------------------------------------------------
 	static std::wstring ensureSaveDir(const Config& cfg) {
 		std::wstring dirW = StringUtils::Utf8ToWide(cfg.savePath);
 		if (dirW.empty()) {
-			// Ĭ�ϣ���ǰ����Ŀ¼�� Screenshots
+			// 默认：当前目录下的 Screenshots
 			dirW = L"Screenshots";
 		}
 		if (!PathUtils::IsAbsolute(dirW)) {
@@ -53,7 +51,7 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// ScreenshotApp ʵ��
+	// ScreenshotApp 实现
 	// ----------------------------------------------------------------------------
 	ScreenshotApp::ScreenshotApp() : capture_(&cfg_) {
 
@@ -66,14 +64,14 @@ namespace screenshot_tool {
 	bool ScreenshotApp::Initialize(HINSTANCE hInst) {
 		hInst_ = hInst;
 
-		// 1) ��������
-		LoadConfig(cfg_); // Config.cpp �ṩʵ��
+		// 1) 加载配置
+		LoadConfig(cfg_); // Config.cpp 提供实现
 		Logger::Info(L"Config loaded.");
 
-		// 2) �Զ���������Ŀ¼���������ã�
+		// 2) 确保截图保存目录存在
 		ensureSaveDir(cfg_);
 
-		// 3) ע�ᴰ���� & �������������ڣ�������Ϣ�ַ� / ���� / �ȼ���
+		// 3) 注册窗口 & 创建主窗口
 		const wchar_t* kClassName = L"HDRScreenshotAppWnd";
 		WNDCLASSEX wc{ sizeof(WNDCLASSEX) };
 		wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -81,7 +79,7 @@ namespace screenshot_tool {
 		wc.cbClsExtra = 0;
 		wc.cbWndExtra = sizeof(LONG_PTR);
 		wc.hInstance = hInst_;
-		wc.hIcon = LoadIcon(hInst_, MAKEINTRESOURCE(1)); // ��Դ�е�1��ͼ��ռλ
+		wc.hIcon = LoadIcon(hInst_, MAKEINTRESOURCE(1)); // 资源中的1号图标占位
 		wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 		wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
 		wc.lpszMenuName = nullptr;
@@ -104,12 +102,12 @@ namespace screenshot_tool {
 			return false;
 		}
 
-		// 4) ��ʼ������ͼ��
+		// 4) 初始化托盘图标
 		if (!tray_.Create(hwnd_, WM_ST_TRAYICON, nullptr, L"HDR Screenshot Tool")) {
 			Logger::Error(L"Tray icon init failed");
 		}
 
-		// 5) �ȼ�ע��
+		// 5) 热键注册
 		if (!hotkeys_.RegisterHotkey(hwnd_, HOTKEY_ID_REGION, cfg_.regionHotkey)) {
 			Logger::Warn(L"Register region hotkey failed: {}", StringUtils::Utf8ToWide(cfg_.regionHotkey));
 		}
@@ -117,7 +115,7 @@ namespace screenshot_tool {
 			Logger::Warn(L"Register fullscreen hotkey failed: {}", StringUtils::Utf8ToWide(cfg_.fullscreenHotkey));
 		}
 
-		// 6) Overlay������ѡ��
+		// 6) Overlay初始化（区域选择）
 		auto regionCallback = [this](const RECT& rect) {
 			onRegionSelected(rect);
 		};
@@ -125,12 +123,12 @@ namespace screenshot_tool {
 			Logger::Warn(L"Overlay create failed (region capture disabled)");
 		}
 
-		// 7) Capture ���߳�ʼ�����ײ� DXGI + GDI ���ˣ�
+		// 7) Capture 初始化（底层 DXGI + GDI 捕获）
 		if (!capture_.Initialize()) {
 			Logger::Warn(L"Capture init failed; will rely on GDI fallback");
 		}
 
-		// 8) �Զ�������������Ϊ true��
+		// 8) 自动启动设置为 true
 		applyAutoStart();
 
 		running_ = true;
@@ -164,7 +162,7 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// ���̲˵��������
+	// 托盘菜单处理
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::onTrayMenu(UINT cmd) {
 		switch (cmd) {
@@ -187,7 +185,7 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// �����ͼ����
+	// 区域截图
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::doCaptureRegion() {
 		if (!overlay_.IsValid()) {
@@ -198,23 +196,23 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// ȫ����ͼ����
+	// 全屏截图
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::doCaptureFullscreen() {
-		// TODO: ��������ץ��ǰ��ʾ��������ȫ��
+		// TODO: 实现捕获当前显示器或整个屏幕
 		RECT vr = capture_.GetVirtualDesktop();
-		CaptureRect(vr); // ��ʱ����ͬ�ӿڣ�������
+		CaptureRect(vr); // 暂时使用相同接口，后续扩展
 	}
 
 	// ----------------------------------------------------------------------------
-	// Overlay �������ѡ�� -> App �յ� WM_ST_REGION_DONE
+	// Overlay 区域选择 -> App 接收 WM_ST_REGION_DONE
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::onRegionSelected(const RECT& r) {
 		CaptureRect(r);
 	}
 
 	// ----------------------------------------------------------------------------
-	// ʵ��ִ�н�ͼ�������ȫ����
+	// 实现执行截图逻辑，支持全屏
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::CaptureRect(const RECT& r) {
 		std::wstring savePath = ensureSaveDir(cfg_);
@@ -224,24 +222,24 @@ namespace screenshot_tool {
 		switch (res) {
 		case SmartCapture::Result::OK:
 			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"��ͼ�ѱ���", filename.c_str());
+				WinNotification::ShowBalloon(hwnd_, L"截图已保存", filename.c_str());
 			}
 			break;
 		case SmartCapture::Result::FallbackGDI:
 			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"DXGI ʧ�ܣ���ʹ�� GDI", filename.c_str());
+				WinNotification::ShowBalloon(hwnd_, L"DXGI 失败，改用 GDI", filename.c_str());
 			}
 			break;
 		default:
 			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"��ͼʧ��", L"��鿴��־");
+				WinNotification::ShowBalloon(hwnd_, L"截图失败", L"请查看日志");
 			}
 			break;
 		}
 	}
 
 	// ----------------------------------------------------------------------------
-	// Ӧ���Զ��������ã�����/ɾ����ݷ�ʽ��
+	// 应用自动启动设置，创建/删除快捷方式
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::applyAutoStart() {
 		if (cfg_.autoStart) {
@@ -256,7 +254,7 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// Window Proc �ŽӾ�̬ -> ʵ��
+	// Window Proc 静态 -> 实例
 	// ----------------------------------------------------------------------------
 	LRESULT CALLBACK ScreenshotApp::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		ScreenshotApp* self = nullptr;
@@ -276,7 +274,7 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// ʵ����Ϣ����
+	// 实例消息处理
 	// ----------------------------------------------------------------------------
 	LRESULT ScreenshotApp::instanceProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		switch (msg) {
@@ -298,19 +296,19 @@ namespace screenshot_tool {
 		}
 
 		case WM_ST_TRAYICON: {
-			// lParam ���ֵ������
+			// lParam 表示事件类型
 			if (lParam == WM_LBUTTONDBLCLK) {
 				doCaptureRegion();
 			}
 			else if (lParam == WM_RBUTTONUP) {
 				HMENU menu = CreatePopupMenu();
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_REGION, L"�����ͼ");
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_FULLSCREEN, L"ȫ����ͼ");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_REGION, L"区域截图");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_FULLSCREEN, L"全屏截图");
 				AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_OPEN_FOLDER, L"�򿪱���Ŀ¼");
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART, cfg_.autoStart ? L"ȡ����������" : L"���ÿ�������");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_OPEN_FOLDER, L"打开保存目录");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART, cfg_.autoStart ? L"取消开机启动" : L"设置开机启动");
 				AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_EXIT, L"�˳�");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_EXIT, L"退出");
 				POINT pt; GetCursorPos(&pt);
 				SetForegroundWindow(hWnd);
 				TrackPopupMenu(menu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, nullptr);
@@ -320,8 +318,8 @@ namespace screenshot_tool {
 		}
 
 		case WM_ST_REGION_DONE: {
-			// Overlay �� lParam ���� RECT* �� encoded rect���˴��򻯣�RECT ֱ�Ӹ���
-			RECT r = *reinterpret_cast<RECT*>(lParam); // TODO: �� Overlay ʵ�ֵ���
+			// Overlay 将 lParam 传递 RECT* 或 encoded rect，此处简化，RECT 直接拷贝
+			RECT r = *reinterpret_cast<RECT*>(lParam); // TODO: 从 Overlay 实现获取
 			onRegionSelected(r);
 			return 0;
 		}

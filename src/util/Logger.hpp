@@ -6,11 +6,11 @@
 
 namespace screenshot_tool {
 
-    // 调试日志类，输出到调试器 + 可选写文件（根据 config.debugMode开启）
+    // Debug logging class, outputs to debugger + optional file writing (enabled by config.debugMode)
     class Logger {
     public:
         static Logger& Get();
-        static void EnableFileLogging(const std::wstring& path); // 启用文件输出
+        static void EnableFileLogging(const std::wstring& path); // Enable file output
 
         template<class...Args>
         static void Info(std::wstring_view fmt, Args&&...args) { Get().logImpl(L"INFO", fmt, std::forward<Args>(args)...); }
