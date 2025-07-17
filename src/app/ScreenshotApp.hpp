@@ -29,7 +29,8 @@ namespace screenshot_tool {
         void doCaptureFullscreen();
         void onRegionSelected(const RECT& r);
         void applyAutoStart();
-        void CaptureRect(const RECT& r);
+        void CaptureRect(const RECT& r);          // 从缓存中提取区域
+        void CaptureRectDirect(const RECT& r);    // 直接捕获区域
         bool ensureCaptureReady(); // 确保捕获系统就绪，检测显示配置变化
 
         HINSTANCE      hInst_ = nullptr;

@@ -208,5 +208,44 @@ namespace screenshot_tool {
         
         return (clipboardSuccess && fileSuccess) ? Result::OK : Result::Failed;
     }
+    
+    bool SmartCapture::GetCachedImageAsRGB8(ImageBuffer& outRGB8) const {
+        if (!hasCachedData_) {
+            Logger::Error(L"No cached data available");
+            return false;
+        }
+        
+        // 如果已经是RGB8格式，直接复制
+        if (cachedFullscreen_.format == PixelFormat::RGB8) {
+            outRGB8 = cachedFullscreen_;
+            return true;
+        }
+        
+        // 需要格式转换
+        outRGB8.format = PixelFormat::RGB8;
+        outRGB8.width = cachedFullscreen_.width;
+        outRGB8.height = cachedFullscreen_.height;
+        outRGB8.stride = outRGB8.width * 3; // RGB8格式每像素3字节
+        outRGB8.data.resize(outRGB8.stride * outRGB8.height);
+        
+        // 复制原始数据到临时缓冲区进行转换
+        ImageBuffer tempBuffer = cachedFullscreen_;
+        
+        // 使用PixelConvert进行格式转换
+        // 注意：只有在实际获取到HDR格式数据时才进行HDR处理
+        bool isHDR = dxgi_.IsHDREnabled() && 
+                    (cachedFormat_ == DXGI_FORMAT_R16G16B16A16_FLOAT || 
+                     cachedFormat_ == DXGI_FORMAT_R10G10B10A2_UNORM);
+        
+        // 转换为sRGB8格式
+        PixelConvert::ToSRGB8(cachedFormat_, tempBuffer, isHDR, cfg_);
+        
+        // 将转换后的数据复制到输出缓冲区
+        outRGB8 = tempBuffer;
+        outRGB8.format = PixelFormat::RGB8;
+        
+        Logger::Debug(L"Converted cached image to RGB8 format: {}x{}", outRGB8.width, outRGB8.height);
+        return true;
+    }
 
 } // namespace screenshot_tool

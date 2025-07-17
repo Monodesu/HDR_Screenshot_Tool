@@ -34,6 +34,13 @@ namespace screenshot_tool {
         
         // ---- 工具方法 -----------------------------------------------------------
         RECT GetVirtualDesktop() const;
+        
+        // ---- 访问缓存数据 -------------------------------------------------------
+        const ImageBuffer* GetCachedImage() const { return hasCachedData_ ? &cachedFullscreen_ : nullptr; }
+        bool HasCachedData() const { return hasCachedData_; }
+        
+        // 获取缓存图像的RGB8版本（用于overlay背景显示）
+        bool GetCachedImageAsRGB8(ImageBuffer& outRGB8) const;
 
     private:
         // 区域抓屏到 ImageBuffer (8-bit RGB)

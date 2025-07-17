@@ -12,6 +12,7 @@
 #include "../platform/WinShell.hpp"
 #include "../platform/WinGDIPlusInit.hpp"
 #include "../capture/SmartCapture.hpp"
+#include "../image/ImageBuffer.hpp" // 添加ImageBuffer头文件
 
 #include <string>
 #include <string_view>
@@ -292,7 +293,7 @@ namespace screenshot_tool {
 		case TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART:
 			cfg_.autoStart = !cfg_.autoStart;
 			applyAutoStart();
-			// 立即保存配置变更
+			// 立刻保存配置变更
 			if (SaveConfig(cfg_, L"config.ini")) {
 				Logger::Info(L"AutoStart setting saved: {}", cfg_.autoStart ? L"enabled" : L"disabled");
 			}
@@ -306,6 +307,11 @@ namespace screenshot_tool {
 			cfg_.regionFullscreenMonitor = !cfg_.regionFullscreenMonitor;
 			SaveConfig(cfg_, L"config.ini");
 			Logger::Info(L"Region fullscreen monitor: {}", cfg_.regionFullscreenMonitor ? L"enabled" : L"disabled");
+			break;
+		case TrayMenuId::IDM_TRAY_TOGGLE_SAVEFILE:
+			cfg_.saveToFile = !cfg_.saveToFile;
+			SaveConfig(cfg_, L"config.ini");
+			Logger::Info(L"Save to file: {}", cfg_.saveToFile ? L"enabled" : L"disabled");
 			break;
 		case TrayMenuId::IDM_TRAY_EXIT:
 			PostMessage(hwnd_, WM_CLOSE, 0, 0);
@@ -355,6 +361,19 @@ namespace screenshot_tool {
 			return;
 		}
 		
+		// 将缓存的图像数据传递给overlay用作背景
+		ImageBuffer rgb8Image;
+		if (capture_.GetCachedImageAsRGB8(rgb8Image)) {
+			Logger::Info(L"Setting background image for overlay: {}x{}", rgb8Image.width, rgb8Image.height);
+			overlay_.SetBackgroundImage(rgb8Image.data.data(), 
+			                          rgb8Image.width, 
+			                          rgb8Image.height, 
+			                          rgb8Image.stride);
+		} else {
+			Logger::Warn(L"Failed to get RGB8 cached image for overlay background");
+			overlay_.SetBackgroundImage(nullptr, 0, 0, 0); // 清除背景
+		}
+		
 		// 然后显示 overlay 进行区域选择
 		// 如果支持多显示器区域选择，可以传递overlayRect给overlay
 		if (cfg_.regionFullscreenMonitor) {
@@ -386,7 +405,14 @@ namespace screenshot_tool {
 			            captureRect.left, captureRect.top);
 		}
 		
-		CaptureRect(captureRect);
+		// 确保捕获系统就绪，检测显示配置变化
+		if (!ensureCaptureReady()) {
+			Logger::Error(L"Failed to ensure capture system ready");
+			return;
+		}
+		
+		// 直接执行全屏截图 - 不使用缓存，立即捕获
+		CaptureRectDirect(captureRect);
 	}
 
 	// ----------------------------------------------------------------------------
@@ -435,6 +461,45 @@ namespace screenshot_tool {
 		}
 		
 		Logger::Info(L"<<< CaptureRect finished");
+	}
+	
+	// ----------------------------------------------------------------------------
+	// 直接捕获指定区域（不依赖缓存，用于全屏截图）
+	// ----------------------------------------------------------------------------
+	void ScreenshotApp::CaptureRectDirect(const RECT& r) {
+		Logger::Info(L">>> CaptureRectDirect called with rect: ({},{}) to ({},{})", 
+		            r.left, r.top, r.right, r.bottom);
+		
+		std::wstring savePath = ensureSaveDir(cfg_);
+		std::wstring filename = PathUtils::MakeTimestampedPngNameW();
+		
+		// 构建完整的文件路径
+		std::wstring fullPath = savePath;
+		if (!fullPath.empty() && fullPath.back() != L'\\') {
+			fullPath += L'\\';
+		}
+		fullPath += filename;
+
+		Logger::Info(L"Saving screenshot to: {}", fullPath);
+
+		// 直接捕获指定区域
+		SmartCapture::Result res = capture_.CaptureToFileAndClipboard(hwnd_, r, cfg_.saveToFile ? fullPath.c_str() : nullptr);
+		
+		Logger::Info(L"Screenshot capture result: {}", static_cast<int>(res));
+		
+		switch (res) {
+		case SmartCapture::Result::OK:
+			Logger::Info(L"Screenshot saved successfully: {}", filename);
+			break;
+		case SmartCapture::Result::FallbackGDI:
+			Logger::Info(L"Screenshot saved using GDI fallback: {}", filename);
+			break;
+		default:
+			Logger::Error(L"Screenshot failed");
+			break;
+		}
+		
+		Logger::Info(L"<<< CaptureRectDirect finished");
 	}
 
 	// ----------------------------------------------------------------------------
@@ -548,7 +613,10 @@ namespace screenshot_tool {
                 
                 AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_OPEN_FOLDER, L"打开保存目录");
-                AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART, cfg_.autoStart ? L"取消开机启动" : L"设置开机启动");
+                AppendMenu(menu, MF_STRING | (cfg_.saveToFile ? MF_CHECKED : MF_UNCHECKED), 
+                          TrayMenuId::IDM_TRAY_TOGGLE_SAVEFILE, L"保存到文件");
+                AppendMenu(menu, MF_STRING | (cfg_.autoStart ? MF_CHECKED : MF_UNCHECKED), 
+                          TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART, L"开机启动");
                 AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_EXIT, L"退出");
                 POINT pt; GetCursorPos(&pt);

@@ -104,6 +104,7 @@
     <ClInclude Include="src\util\StringUtils.hpp">
       <Filter>源文件\util</Filter>
     </ClInclude>
+    <ClInclude Include="src\platform\WinNotification.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\platform\WinShell.cpp">
@@ -168,6 +169,9 @@
     </ClCompile>
     <ClCompile Include="src\util\StringUtils.cpp">
       <Filter>源文件\util</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform\WinNotification.cpp">
+      <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
