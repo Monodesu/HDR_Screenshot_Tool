@@ -30,6 +30,7 @@ namespace screenshot_tool {
         
         // 淡入淡出动画相关
         void startFadeIn();
+        void startFadeToFullOpaque();  // 新增：启动淡入到完全不透明的动画
         void startFadeOut();
         void updateFade();
         void onFadeComplete();
@@ -51,11 +52,12 @@ namespace screenshot_tool {
         BYTE alpha_ = 0; 
         bool fadingIn_ = false; 
         bool fadingOut_ = false;
+        bool fadingToFullOpaque_ = false;  // 新增：淡入到完全不透明的状态
         UINT_PTR timerId_ = 0;
         static constexpr UINT_PTR FADE_TIMER_ID = 1;
         static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度
-        static constexpr BYTE FADE_STEP = 20;      // 每次淡入淡出的步长
-        static constexpr UINT FADE_INTERVAL = 16; // 约60FPS的更新间隔
+        static constexpr BYTE FADE_STEP = 32;      // 更大的步长，减少动画帧数，提升性能
+        static constexpr UINT FADE_INTERVAL = 20; // 50FPS，在流畅性和性能间找平衡
         
         // 背景检测定时器
         UINT_PTR backgroundCheckTimerId_ = 0;

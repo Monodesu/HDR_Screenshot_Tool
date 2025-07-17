@@ -6,6 +6,26 @@
 namespace screenshot_tool {
 
     static const wchar_t* kOverlayClass = L"ScreenShotOverlayWindow";
+    
+    // 颜色常量定义 - 统一管理所有暗化相关的颜色
+    namespace OverlayColors {
+        // 透明键颜色 - 用于分层窗口透明区域
+        static constexpr COLORREF TRANSPARENT_KEY = RGB(255, 0, 255);
+        
+        // 暗化遮罩颜色 - 用于AlphaBlend半透明遮罩效果  
+        static constexpr COLORREF DARKEN_MASK = RGB(60, 60, 60);
+        
+        // 基础暗化颜色 - 用于没有背景图像时的暗化层
+        static constexpr COLORREF DARKEN_BASE = RGB(40, 40, 40);
+        
+        // 回退暗化颜色 - 用于双缓冲失败时的直接绘制
+        static constexpr COLORREF DARKEN_FALLBACK = RGB(80, 80, 80);
+        
+        // UI元素颜色
+        static constexpr COLORREF TEXT_BACKGROUND = RGB(40, 40, 40);
+        static constexpr COLORREF SELECTION_BORDER = RGB(255, 255, 255);
+        static constexpr COLORREF TEXT_COLOR = RGB(255, 255, 255);
+    }
 
     bool SelectionOverlay::Create(HINSTANCE inst, HWND parent, Callback cb) {
         parent_ = parent; 
@@ -71,7 +91,7 @@ namespace screenshot_tool {
                 KillTimer(hwnd_, timerId_);
                 timerId_ = 0;
             }
-            fadingIn_ = fadingOut_ = false;
+            fadingIn_ = fadingOut_ = fadingToFullOpaque_ = false;  // 重置所有动画状态
             ShowWindow(hwnd_, SW_HIDE);
         } else {
             startFadeOut();
@@ -110,6 +130,18 @@ namespace screenshot_tool {
         memset(&selectedRect_, 0, sizeof(selectedRect_));
         notifyOnHide_ = false;
         
+        // 重置所有动画状态 - 这对于第二次及后续调用很重要
+        if (timerId_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
+        }
+        if (backgroundCheckTimerId_) {
+            KillTimer(hwnd_, backgroundCheckTimerId_);
+            backgroundCheckTimerId_ = 0;
+        }
+        fadingIn_ = fadingOut_ = fadingToFullOpaque_ = false;
+        alpha_ = 0;  // 重置透明度
+        
         // 存储虚拟桌面偏移信息
         virtualDesktopLeft_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
         virtualDesktopTop_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -144,26 +176,64 @@ namespace screenshot_tool {
     void SelectionOverlay::startFadeIn() {
         Logger::Debug(L"startFadeIn called, backgroundBitmap_={}", backgroundBitmap_ ? L"valid" : L"null");
         
-        // 无论是否有背景图像，都使用淡入效果
+        // 停止之前的动画和定时器
+        if (timerId_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
+            Logger::Debug(L"Previous timer killed in startFadeIn");
+        }
+        
+        // 强制重置所有动画状态
+        fadingIn_ = false;
+        fadingOut_ = false;
+        fadingToFullOpaque_ = false;
+        
+        // 初始化淡入状态
+        alpha_ = 0;
+        fadingIn_ = true;
+        
+        // 使用颜色键透明度 - 品红色将被视为透明
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
+        
+        // 启动定时器
+        timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
+        if (!timerId_) {
+            Logger::Error(L"Failed to create fade timer in startFadeIn");
+            return;
+        }
+        
+        Logger::Debug(L"Fade-in animation started with alpha={}, timerId={}", alpha_, timerId_);
+    }
+
+    void SelectionOverlay::startFadeToFullOpaque() {
+        Logger::Debug(L"startFadeToFullOpaque called from alpha={}", alpha_);
+        
+        // 如果当前alpha已经是255，不需要动画
+        if (alpha_ >= 255) {
+            Logger::Debug(L"Already at full opacity, no animation needed");
+            return;
+        }
+        
         // 停止之前的动画
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
         }
         
-        // 初始化淡入状态
-        alpha_ = 0;
-        fadingIn_ = true;
+        // 初始化从当前透明度淡入到完全不透明的状态
+        fadingIn_ = false;
         fadingOut_ = false;
+        fadingToFullOpaque_ = true;
         
-        // 使用颜色键透明度 - 品红色(RGB(255,0,255))将被视为透明
-        // 同时设置alpha透明度用于淡入淡出效果
-        SetLayeredWindowAttributes(hwnd_, RGB(255, 0, 255), alpha_, LWA_COLORKEY | LWA_ALPHA);
+        // 确保alpha至少达到TARGET_ALPHA
+        if (alpha_ < TARGET_ALPHA) {
+            alpha_ = TARGET_ALPHA;
+        }
         
-        // 启动定时器
+        // 启动定时器，从当前alpha值平滑过渡到255
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
         
-        Logger::Debug(L"Fade-in animation started with alpha={}", alpha_);
+        Logger::Debug(L"Fade-to-full-opaque animation started from alpha={}", alpha_);
     }
 
     void SelectionOverlay::startFadeOut() {
@@ -176,43 +246,92 @@ namespace screenshot_tool {
         // 初始化淡出状态
         fadingIn_ = false;
         fadingOut_ = true;
+        fadingToFullOpaque_ = false;
         
         // 启动定时器
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
     }
 
     void SelectionOverlay::updateFade() {
+        bool shouldContinue = false;
+        
         if (fadingIn_) {
             alpha_ += FADE_STEP;
             if (alpha_ >= TARGET_ALPHA) {
                 alpha_ = TARGET_ALPHA;
                 fadingIn_ = false;
-                onFadeComplete();
+                shouldContinue = false;
+            } else {
+                shouldContinue = true;
+            }
+        } else if (fadingToFullOpaque_) {
+            // 从当前透明度平滑过渡到完全不透明
+            alpha_ += FADE_STEP;
+            if (alpha_ >= 255) {
+                alpha_ = 255;
+                fadingToFullOpaque_ = false;
+                shouldContinue = false;
+            } else {
+                shouldContinue = true;
             }
         } else if (fadingOut_) {
             if (alpha_ <= FADE_STEP) {
                 alpha_ = 0;
                 fadingOut_ = false;
-                onFadeComplete();
+                shouldContinue = false;
             } else {
                 alpha_ -= FADE_STEP;
+                shouldContinue = true;
             }
+        } else {
+            // 错误状态：没有任何动画正在进行，但定时器仍在运行
+            Logger::Warn(L"updateFade called but no animation is active! Stopping timer.");
+            if (timerId_) {
+                KillTimer(hwnd_, timerId_);
+                timerId_ = 0;
+            }
+            return; // 直接返回，不更新窗口
         }
         
         // 更新窗口透明度 - 继续使用颜色键和alpha组合
-        SetLayeredWindowAttributes(hwnd_, RGB(255, 0, 255), alpha_, LWA_COLORKEY | LWA_ALPHA);
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
+        
+        // 如果动画完成，调用完成回调
+        if (!shouldContinue) {
+            onFadeComplete();
+        }
+        
+        Logger::Debug(L"updateFade: alpha={}, fadingIn={}, fadingToFullOpaque={}, fadingOut={}", 
+                     alpha_, fadingIn_, fadingToFullOpaque_, fadingOut_);
     }
 
     void SelectionOverlay::onFadeComplete() {
-        // 停止定时器
+        Logger::Debug(L"onFadeComplete called - fadingIn={}, fadingOut={}, fadingToFullOpaque={}, alpha={}", 
+                     fadingIn_, fadingOut_, fadingToFullOpaque_, alpha_);
+        
+        // 停止定时器 - 这是关键，必须确保定时器被停止
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
+            Logger::Debug(L"Animation timer stopped in onFadeComplete");
         }
         
+        // 确保所有动画状态都被重置
+        fadingIn_ = false;
+        fadingOut_ = false;
+        fadingToFullOpaque_ = false;
+        
         // 如果淡出完成，隐藏窗口
-        if (!fadingIn_ && !fadingOut_ && alpha_ == 0) {
+        if (alpha_ == 0) {
             ShowWindow(hwnd_, SW_HIDE);
+            Logger::Debug(L"Window hidden after fade out complete");
+        }
+        
+        // 记录动画完成
+        if (alpha_ == 255) {
+            Logger::Debug(L"Fade-to-full-opaque animation completed, overlay fully opaque");
+        } else if (alpha_ == TARGET_ALPHA) {
+            Logger::Debug(L"Fade-in animation completed, overlay at target alpha");
         }
     }
 
@@ -265,12 +384,7 @@ namespace screenshot_tool {
         
         RECT clientRect = { 0, 0, bufferWidth_, bufferHeight_ };
         
-        // 定义透明区域的颜色键 - 使用纯品红色作为透明键
-        static const COLORREF TRANSPARENT_KEY = RGB(255, 0, 255);
-        // 定义暗化颜色 - 深灰色
-        static const COLORREF DARKEN_COLOR = RGB(40, 40, 40);
-        
-        // 如果有背景图像，先显示背景
+        // 如果有背景图像，显示黑色半透明遮罩效果
         if (backgroundBitmap_) {
             // 创建临时DC来处理背景图像
             HDC backgroundDC = CreateCompatibleDC(memDC_);
@@ -285,10 +399,6 @@ namespace screenshot_tool {
                 int offsetX = windowRect.left - virtualDesktopLeft_;
                 int offsetY = windowRect.top - virtualDesktopTop_;
                 
-                Logger::Debug(L"Window rect: ({}, {}) to ({}, {})", windowRect.left, windowRect.top, windowRect.right, windowRect.bottom);
-                Logger::Debug(L"Virtual desktop offset: ({}, {})", virtualDesktopLeft_, virtualDesktopTop_);
-                Logger::Debug(L"Background offset: ({}, {})", offsetX, offsetY);
-                
                 // 将背景图像复制到后台缓冲区
                 BitBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_,
                       backgroundDC, offsetX, offsetY, SRCCOPY);
@@ -296,46 +406,69 @@ namespace screenshot_tool {
                 SelectObject(backgroundDC, oldBackgroundBitmap);
                 DeleteDC(backgroundDC);
                 
-                // 使用简单的混合方式创建暗化效果
-                // 创建带有alpha通道的黑色层，实现暗化效果
-                HDC darkDC = CreateCompatibleDC(memDC_);
-                if (darkDC) {
-                    HBITMAP darkBitmap = CreateCompatibleBitmap(memDC_, bufferWidth_, bufferHeight_);
-                    if (darkBitmap) {
-                        HBITMAP oldDarkBitmap = (HBITMAP)SelectObject(darkDC, darkBitmap);
-                        
-                        // 创建半透明暗化效果
-                        HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
-                        HBRUSH oldBrush = (HBRUSH)SelectObject(darkDC, darkBrush);
-                        FillRect(darkDC, &clientRect, darkBrush);
-                        SelectObject(darkDC, oldBrush);
-                        DeleteObject(darkBrush);
-                        
-                        // 使用SRCPAINT模式创建暗化效果
-                        // 这会让原图像变暗但不会变成纯黑色
-                        BLENDFUNCTION bf = {};
-                        bf.BlendOp = AC_SRC_OVER;
-                        bf.BlendFlags = 0;
-                        bf.SourceConstantAlpha = 100; // 调整暗化程度
-                        bf.AlphaFormat = 0;
-                        
-                        // 使用Windows API的PatBlt创建简单暗化
-                        COLORREF oldBkColor = SetBkColor(memDC_, RGB(0, 0, 0));
-                        COLORREF oldTextColor = SetTextColor(memDC_, RGB(128, 128, 128));
-                        PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
-                        PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
-                        SetBkColor(memDC_, oldBkColor);
-                        SetTextColor(memDC_, oldTextColor);
-                        
-                        SelectObject(darkDC, oldDarkBitmap);
-                        DeleteObject(darkBitmap);
-                    }
-                    DeleteDC(darkDC);
+                // 创建黑色半透明遮罩效果 - 使用统一的暗化颜色
+                HBRUSH darkenBrush = CreateSolidBrush(OverlayColors::DARKEN_MASK);
+                HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkenBrush);
+                
+                // 设置混合模式，让背景图像变暗但仍可见
+                int oldBkMode = SetBkMode(memDC_, TRANSPARENT);
+                
+                // 使用透明度较高的深色覆盖层创建半透明效果
+                BLENDFUNCTION blend = {0};
+                blend.BlendOp = AC_SRC_OVER;
+                blend.BlendFlags = 0;
+                blend.SourceConstantAlpha = 120; // 约47%透明度，创建较好的暗化效果
+                blend.AlphaFormat = 0;
+                
+                // 检查是否可以使用AlphaBlend（通过尝试获取函数地址）
+                HMODULE hMsimg32 = GetModuleHandleW(L"msimg32.dll");
+                if (!hMsimg32) {
+                    hMsimg32 = LoadLibraryW(L"msimg32.dll");
                 }
+                
+                if (hMsimg32) {
+                    // 尝试获取AlphaBlend函数
+                    typedef BOOL (WINAPI *AlphaBlendProc)(HDC, int, int, int, int, HDC, int, int, int, int, BLENDFUNCTION);
+                    AlphaBlendProc pAlphaBlend = (AlphaBlendProc)GetProcAddress(hMsimg32, "AlphaBlend");
+                    
+                    if (pAlphaBlend) {
+                        // 创建临时暗化DC
+                        HDC darkenDC = CreateCompatibleDC(memDC_);
+                        if (darkenDC) {
+                            HBITMAP darkenBitmap = CreateCompatibleBitmap(memDC_, bufferWidth_, bufferHeight_);
+                            if (darkenBitmap) {
+                                HBITMAP oldDarkenBitmap = (HBITMAP)SelectObject(darkenDC, darkenBitmap);
+                                
+                                // 用统一的暗化颜色填充暗化位图
+                                FillRect(darkenDC, &clientRect, darkenBrush);
+                                
+                                // 应用AlphaBlend暗化
+                                pAlphaBlend(memDC_, 0, 0, bufferWidth_, bufferHeight_,
+                                           darkenDC, 0, 0, bufferWidth_, bufferHeight_, blend);
+                                
+                                SelectObject(darkenDC, oldDarkenBitmap);
+                                DeleteObject(darkenBitmap);
+                            }
+                            DeleteDC(darkenDC);
+                        }
+                    } else {
+                        // AlphaBlend不可用，使用简单的暗化方法
+                        PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
+                        FillRect(memDC_, &clientRect, darkenBrush);
+                        PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
+                    }
+                } else {
+                    // 无法加载msimg32.dll，使用最基本的暗化方法
+                    FillRect(memDC_, &clientRect, darkenBrush);
+                }
+                
+                SetBkMode(memDC_, oldBkMode);
+                SelectObject(memDC_, oldBrush);
+                DeleteObject(darkenBrush);
             }
         } else {
-            // 没有背景图像时，使用纯暗化层
-            HBRUSH darkBrush = CreateSolidBrush(DARKEN_COLOR);
+            // 没有背景图像时，使用基础暗化颜色
+            HBRUSH darkBrush = CreateSolidBrush(OverlayColors::DARKEN_BASE);
             HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkBrush);
             FillRect(memDC_, &clientRect, darkBrush);
             SelectObject(memDC_, oldBrush);
@@ -380,7 +513,7 @@ namespace screenshot_tool {
                 }
             } else {
                 // 没有背景图像时，使用透明键颜色填充选择区域
-                HBRUSH clearBrush = CreateSolidBrush(TRANSPARENT_KEY);
+                HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
                 HBRUSH oldBrush2 = (HBRUSH)SelectObject(memDC_, clearBrush);
                 FillRect(memDC_, &selectionRect, clearBrush);
                 SelectObject(memDC_, oldBrush2);
@@ -388,7 +521,7 @@ namespace screenshot_tool {
             }
             
             // 绘制选择框边框
-            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+            HPEN pen = CreatePen(PS_SOLID, 2, OverlayColors::SELECTION_BORDER);
             HPEN oldPen = (HPEN)SelectObject(memDC_, pen);
             SetBkMode(memDC_, TRANSPARENT);
             
@@ -427,21 +560,21 @@ namespace screenshot_tool {
             backgroundCheckTimerId_ = 0;
         }
         
-        // 背景图像设置成功后，立即将overlay设置为完全不透明（alpha=255）
-        // 这样用户就能看到完整的冻结背景图像
+        // 背景图像设置成功后，立即设置为目标透明度，不使用动画
+        // 这样可以避免动画系统可能的问题
         if (hwnd_) {
-            // 停止淡入动画
+            // 停止所有动画
             if (timerId_) {
                 KillTimer(hwnd_, timerId_);
                 timerId_ = 0;
             }
-            fadingIn_ = fadingOut_ = false;
-            alpha_ = 255;  // 完全不透明
+            fadingIn_ = fadingOut_ = fadingToFullOpaque_ = false;
+            alpha_ = TARGET_ALPHA;  // 直接设置为目标透明度
             
-            // 设置窗口为完全不透明，只保留颜色键透明度
-            SetLayeredWindowAttributes(hwnd_, RGB(255, 0, 255), alpha_, LWA_COLORKEY | LWA_ALPHA);
+            // 直接设置窗口透明度，显示暗化的背景
+            SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
             
-            Logger::Debug(L"Background image loaded, overlay set to fully opaque (alpha=255)");
+            Logger::Debug(L"Background image loaded, overlay set directly to target alpha={}", alpha_);
         }
         
         // 如果窗口已经显示，立即重绘显示背景图像
@@ -489,7 +622,7 @@ namespace screenshot_tool {
                 bmi.bmiHeader.biBitCount = 24; // 24位RGB格式
                 bmi.bmiHeader.biCompression = BI_RGB;
                 
-                // PixelConvert输出的是RGB格式，但Windows位图需要BGR格式
+                // PixelConvert输出的是RGB格式，但Windows位图需要BGR 格式
                 // 需要转换RGB到BGR
                 std::vector<uint8_t> bgrData(width * height * 3);
                 for (int y = 0; y < height; ++y) {
@@ -622,7 +755,7 @@ namespace screenshot_tool {
         };
         
         // 绘制半透明的文本背景
-        HBRUSH bgBrush = CreateSolidBrush(RGB(40, 40, 40));
+        HBRUSH bgBrush = CreateSolidBrush(OverlayColors::TEXT_BACKGROUND);
         HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, bgBrush);
         
         // 绘制圆角背景矩形
@@ -632,7 +765,7 @@ namespace screenshot_tool {
         DeleteObject(bgBrush);
         
         // 设置文本渲染属性
-        SetTextColor(hdc, RGB(255, 255, 255));
+        SetTextColor(hdc, OverlayColors::TEXT_COLOR);
         SetBkMode(hdc, TRANSPARENT);
         
         // 绘制文本
@@ -658,10 +791,11 @@ namespace screenshot_tool {
         }
         fadingIn_ = false;
         fadingOut_ = false;
+        fadingToFullOpaque_ = false;  // 重置所有动画状态
         alpha_ = 255;
         
         // 确保窗口完全可见，只使用颜色键透明度
-        SetLayeredWindowAttributes(hwnd_, RGB(255, 0, 255), 255, LWA_COLORKEY);
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
         
         InvalidateRect(hwnd_, nullptr, FALSE); 
     }
@@ -713,8 +847,8 @@ namespace screenshot_tool {
             RECT unionRect;
             UnionRect(&unionRect, &oldRect, &newRect);
             
-            // 扩展边界以确保完全覆盖边框和文字
-            InflateRect(&unionRect, 100, 100);
+            // 优化：减小边界扩展，从100减少到30，减少重绘面积
+            InflateRect(&unionRect, 30, 30);
             
             // 确保重绘区域在窗口范围内
             RECT clientRect;
@@ -846,46 +980,12 @@ namespace screenshot_tool {
                       memDC_, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
             } else {
                 // 双缓冲创建失败，回退到直接绘制
-                // 创建暗化层作为基础
-                HBRUSH darkBrush = CreateSolidBrush(RGB(20, 20, 20));
+                // 使用回退暗化颜色作为基础
+                HBRUSH darkBrush = CreateSolidBrush(OverlayColors::DARKEN_FALLBACK);
                 HBRUSH oldBrush = (HBRUSH)SelectObject(dc, darkBrush);
                 FillRect(dc, &c, darkBrush);
                 SelectObject(dc, oldBrush);
                 DeleteObject(darkBrush);
-                
-                // 只在选择时绘制选择框
-                if (selecting_) {
-                    RECT selectionRect = {
-                        std::min(start_.x, cur_.x),
-                        std::min(start_.y, cur_.y),
-                        std::max(start_.x, cur_.x),
-                        std::max(start_.y, cur_.y)
-                    };
-                    
-                    // 用透明键颜色填充选择区域
-                    HBRUSH clearBrush = CreateSolidBrush(RGB(255, 0, 255));
-                    HBRUSH oldBrush2 = (HBRUSH)SelectObject(dc, clearBrush);
-                    FillRect(dc, &selectionRect, clearBrush);
-                    SelectObject(dc, oldBrush2);
-                    DeleteObject(clearBrush);
-                    
-                    // 绘制选择框边框
-                    HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-                    HPEN oldPen = (HPEN)SelectObject(dc, pen);
-                    SetBkMode(dc, TRANSPARENT);
-                    
-                    MoveToEx(dc, selectionRect.left, selectionRect.top, nullptr);
-                    LineTo(dc, selectionRect.right, selectionRect.top);
-                    LineTo(dc, selectionRect.right, selectionRect.bottom);
-                    LineTo(dc, selectionRect.left, selectionRect.bottom);
-                    LineTo(dc, selectionRect.left, selectionRect.top);
-                    
-                    SelectObject(dc, oldPen);
-                    DeleteObject(pen);
-                    
-                    // 显示尺寸信息
-                    drawSizeText(dc, selectionRect);
-                }
             }
             
             EndPaint(h, &ps); 
