@@ -82,19 +82,38 @@ private:
                 DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
         };
         bool InitMonitor(MonitorInfo& info) {
+                // 清理之前的资源
+                info.dupl.Reset();
+                info.context.Reset();
+                info.device.Reset();
+
                 D3D_FEATURE_LEVEL fl;
                 HRESULT hr = D3D11CreateDevice(
                         info.adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
                         0, nullptr, 0, D3D11_SDK_VERSION,
                         &info.device, &fl, &info.context);
-                if (FAILED(hr)) return false;
+                if (FAILED(hr)) {
+                        if (GetDebugMode() && config) {
+                                std::ofstream debug("debug.txt", std::ios::app);
+                                debug << "Failed to create D3D11 device, HRESULT: 0x" << std::hex << hr << std::endl;
+                        }
+                        return false;
+                }
 
+                // 尝试使用更好的格式
                 DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
                 hr = info.output6->DuplicateOutput1(info.device.Get(), 0, 1, &fmt, &info.dupl);
                 if (FAILED(hr)) {
+                        // 回退到标准输出复制
                         hr = info.output6->DuplicateOutput(info.device.Get(), &info.dupl);
+                        if (FAILED(hr)) {
+                                if (GetDebugMode() && config) {
+                                        std::ofstream debug("debug.txt", std::ios::app);
+                                        debug << "Failed to duplicate output, HRESULT: 0x" << std::hex << hr << std::endl;
+                                }
+                                return false;
+                        }
                 }
-                if (FAILED(hr)) return false;
 
                 DXGI_OUTDUPL_DESC dd{};
                 info.dupl->GetDesc(&dd);
@@ -124,6 +143,9 @@ public:
         const std::vector<MonitorInfo>& GetMonitors() const { return monitors; }
         int GetVirtualLeft() const { return virtualLeft; }
         int GetVirtualTop() const { return virtualTop; }
+        int GetVirtualWidth() const { return virtualWidth; }
+        int GetVirtualHeight() const { return virtualHeight; }
+        bool GetHDREnabled() const { return isHDREnabled; }
         bool Reinitialize() {
                 monitors.clear();
                 virtualLeft = virtualTop = 0;
@@ -180,7 +202,14 @@ public:
                 return true;
         }
 
-       bool CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
+       enum class CaptureResult {
+               Success,
+               TemporaryFailure,      // 可重试，不需要重新初始化
+               NeedsReinitialization, // 需要重新初始化 (设备丢失、配置变化等)
+               NotSupported          // 完全不支持，需要fallback
+       };
+
+       CaptureResult CaptureRegion(int x, int y, int width, int height, const std::string& filename = "") {
                RECT regionRect{ x, y, x + width, y + height };
 
                DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
@@ -197,12 +226,29 @@ public:
                         DXGI_OUTDUPL_FRAME_INFO frameInfo;
                        HRESULT hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
                        if (FAILED(hr)) {
-                               if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_REMOVED) {
-                                       InitMonitor(m);
+                               if (GetDebugMode() && config) {
+                                       std::ofstream debug("debug.txt", std::ios::app);
+                                       debug << "AcquireNextFrame failed, HRESULT: 0x" << std::hex << hr << std::endl;
                                }
-                               hr = m.dupl->AcquireNextFrame(100, &frameInfo, &resource);
+                               
+                               // 记录错误类型，让上层决定重新初始化策略
+                               if (hr == DXGI_ERROR_ACCESS_LOST || 
+                                   hr == DXGI_ERROR_DEVICE_REMOVED ||
+                                   hr == DXGI_ERROR_SESSION_DISCONNECTED) {
+                                       // 明确的设备/会话丢失
+                                       allSuccess = false;
+                                       gotFrame = false;
+                                       continue;
+                               } else if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+                                       // 超时 - 可能是显示器休眠或配置变化
+                                       allSuccess = false;
+                                       continue;
+                               } else {
+                                       // 其他错误也可能需要重新初始化
+                                       allSuccess = false; 
+                                       continue; 
+                               }
                        }
-                       if (FAILED(hr)) { allSuccess = false; continue; }
                        gotFrame = true;
 
                         auto cleanup = [&](void*) { m.dupl->ReleaseFrame(); };
@@ -272,16 +318,91 @@ public:
                         }
                 }
 
-               if (!gotFrame || !allSuccess ||
-                   std::all_of(buffer.begin(), buffer.end(), [](uint8_t v) { return v == 0; })) {
-                        return false;
+               if (!gotFrame || !allSuccess) {
+                        // 无论是没有获取到帧还是有错误，都可能需要重新初始化
+                        // 因为显示器休眠/唤醒、分辨率变化等都会导致这些问题
+                        return CaptureResult::NeedsReinitialization;
+               }
+               
+               if (std::all_of(buffer.begin(), buffer.end(), [](uint8_t v) { return v == 0; })) {
+                        return CaptureResult::TemporaryFailure; // 空数据，可重试
                }
 
-               return ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
+               bool success = ProcessAndSave(buffer.data(), width, height, width * bpp, format, filename);
+               return success ? CaptureResult::Success : CaptureResult::TemporaryFailure;
         }
 
-        bool CaptureFullscreen(const std::string& filename = "") {
+        CaptureResult CaptureFullscreen(const std::string& filename = "") {
                 return CaptureRegion(virtualLeft, virtualTop, virtualWidth, virtualHeight, filename);
+        }
+
+        // GDI fallback - 作为最后的备选方案
+        bool CaptureRegionGDI(int x, int y, int width, int height, const std::string& filename = "") {
+                HDC screenDC = GetDC(nullptr);
+                if (!screenDC) return false;
+
+                HDC memDC = CreateCompatibleDC(screenDC);
+                if (!memDC) {
+                        ReleaseDC(nullptr, screenDC);
+                        return false;
+                }
+
+                HBITMAP bitmap = CreateCompatibleBitmap(screenDC, width, height);
+                if (!bitmap) {
+                        DeleteDC(memDC);
+                        ReleaseDC(nullptr, screenDC);
+                        return false;
+                }
+
+                HBITMAP oldBitmap = static_cast<HBITMAP>(SelectObject(memDC, bitmap));
+
+                // 执行截图
+                bool success = BitBlt(memDC, 0, 0, width, height, screenDC, x, y, SRCCOPY);
+
+                if (success) {
+                        // 转换为RGB数据
+                        BITMAPINFO bmi{};
+                        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                        bmi.bmiHeader.biWidth = width;
+                        bmi.bmiHeader.biHeight = -height; // 负数表示从上到下
+                        bmi.bmiHeader.biPlanes = 1;
+                        bmi.bmiHeader.biBitCount = 32;
+                        bmi.bmiHeader.biCompression = BI_RGB;
+
+                        std::vector<uint8_t> bgraBuffer(width * height * 4);
+                        int scanlines = GetDIBits(memDC, bitmap, 0, height, bgraBuffer.data(), &bmi, DIB_RGB_COLORS);
+                        
+                        if (scanlines > 0) {
+                                // 转换BGRA到RGB
+                                std::vector<uint8_t> rgbBuffer(width * height * 3);
+                                for (int i = 0; i < width * height; ++i) {
+                                        rgbBuffer[i * 3 + 0] = bgraBuffer[i * 4 + 2]; // R
+                                        rgbBuffer[i * 3 + 1] = bgraBuffer[i * 4 + 1]; // G
+                                        rgbBuffer[i * 3 + 2] = bgraBuffer[i * 4 + 0]; // B
+                                }
+
+                                // 保存到剪贴板
+                                bool clipboardSuccess = SaveToClipboard(rgbBuffer, width, height);
+
+                                // 如果需要保存到文件
+                                bool fileSuccess = true;
+                                if (!filename.empty()) {
+                                        fileSuccess = SavePNG(rgbBuffer, width, height, filename);
+                                }
+
+                                success = clipboardSuccess && fileSuccess;
+                        } else {
+                                success = false;
+                        }
+                }
+
+                // 清理资源
+                SelectObject(memDC, oldBitmap);
+                DeleteObject(bitmap);
+                DeleteDC(memDC);
+                ReleaseDC(nullptr, screenDC);
+
+                return success;
         }
 
 private:
@@ -303,11 +424,9 @@ private:
 						debug << "MaxFullFrameLuminance: " << outputDesc1.MaxFullFrameLuminance << std::endl;
 					}
 
-					// Windows HDR模式的颜色空间检查
-					// DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 = 12
-					// DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 = 1
-					isHDREnabled = (outputDesc1.ColorSpace == 12) || // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
-						(outputDesc1.ColorSpace == 1);    // DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
+					// 正确的HDR检测：只有PQ色彩空间才是真正的HDR
+					// DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 = 12 (HDR10/PQ)
+					isHDREnabled = (outputDesc1.ColorSpace == 12); // 只检测HDR10/PQ色彩空间
 
 					if (GetDebugMode()) {
 						std::ofstream debug("debug.txt", std::ios::app);
@@ -315,25 +434,17 @@ private:
 						debug.close();
 					}
 
-					// 额外检查：如果MaxLuminance > 80，也认为是HDR
-					if (!isHDREnabled && outputDesc1.MaxLuminance > 80.0f) {
+					// 额外检查：如果MaxLuminance > 400nits，可能是HDR显示器但未正确设置色彩空间
+					if (!isHDREnabled && outputDesc1.MaxLuminance > 400.0f) {
 						isHDREnabled = true;
 						if (GetDebugMode()) {
 							std::ofstream debug("debug.txt", std::ios::app);
-							debug << "HDR detection based on MaxLuminance: Yes" << std::endl;
+							debug << "HDR detection based on MaxLuminance (>400 nits): Yes" << std::endl;
 							debug.close();
 						}
 					}
 
-					// 强制检测：暂时假设任何非默认设置都是HDR
-					if (!isHDREnabled) {
-						isHDREnabled = true; // 强制启用HDR处理进行测试
-						if (GetDebugMode()) {
-							std::ofstream debug("debug.txt", std::ios::app);
-							debug << "Force HDR processing to be enabled for testing" << std::endl;
-							debug.close();
-						}
-					}
+					// 移除强制HDR检测逻辑，使用实际检测结果
 
 					if (GetDebugMode()) {
 						std::ofstream debug("debug.txt", std::ios::app);
@@ -344,14 +455,11 @@ private:
 			}
 		}
 
-		// 如果无法获取信息，默认启用HDR处理
-		if (!isHDREnabled) {
-			isHDREnabled = true;
-			if (GetDebugMode()) {
-				std::ofstream debug("debug.txt", std::ios::app);
-				debug << "Unable to obtain display information, HDR processing is enabled by default" << std::endl;
-				debug.close();
-			}
+		// 如果无法获取信息，保持SDR处理（默认false）
+		if (GetDebugMode() && !isHDREnabled) {
+			std::ofstream debug("debug.txt", std::ios::app);
+			debug << "Unable to obtain HDR display information, using SDR processing" << std::endl;
+			debug.close();
 		}
 	}
 
@@ -855,6 +963,10 @@ private:
 public:
         RECT selectedRect{};
         HWND GetHwnd() const { return hwnd; }
+        
+        ~SelectionOverlay() {
+                Destroy();
+        }
 
         bool Create(HWND msgWnd) {
 		messageWnd = msgWnd;
@@ -922,9 +1034,16 @@ public:
 
 	void Destroy() {
 		if (memDC) {
-			SelectObject(memDC, oldBitmap);
-			DeleteObject(memBitmap);
+			if (oldBitmap) {
+				SelectObject(memDC, oldBitmap);
+				oldBitmap = nullptr;
+			}
+			if (memBitmap) {
+				DeleteObject(memBitmap);
+				memBitmap = nullptr;
+			}
 			DeleteDC(memDC);
+			memDC = nullptr;
 		}
 		if (hwnd) {
 			DestroyWindow(hwnd);
@@ -939,8 +1058,9 @@ public:
 		switch (msg) {
 		case WM_LBUTTONDOWN:
 			overlay->isSelecting = true;
-			overlay->startPoint.x = GET_X_LPARAM(lParam);
-			overlay->startPoint.y = GET_Y_LPARAM(lParam);
+			// 直接转换为全局屏幕坐标
+			overlay->startPoint.x = GET_X_LPARAM(lParam) + GetSystemMetrics(SM_XVIRTUALSCREEN);
+			overlay->startPoint.y = GET_Y_LPARAM(lParam) + GetSystemMetrics(SM_YVIRTUALSCREEN);
 			overlay->endPoint = overlay->startPoint;
 			SetCapture(hwnd);
 			InvalidateRect(hwnd, nullptr, FALSE);
@@ -952,8 +1072,9 @@ public:
 
 		case WM_MOUSEMOVE:
 			if (overlay->isSelecting) {
-				overlay->endPoint.x = GET_X_LPARAM(lParam);
-				overlay->endPoint.y = GET_Y_LPARAM(lParam);
+				// 直接转换为全局屏幕坐标
+				overlay->endPoint.x = GET_X_LPARAM(lParam) + GetSystemMetrics(SM_XVIRTUALSCREEN);
+				overlay->endPoint.y = GET_Y_LPARAM(lParam) + GetSystemMetrics(SM_YVIRTUALSCREEN);
 				InvalidateRect(hwnd, nullptr, FALSE);
 			}
 			break;
@@ -1002,8 +1123,14 @@ public:
 				auto pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
 				auto oldPen = SelectObject(overlay->memDC, pen);
 
-				auto [minX, maxX] = std::minmax(overlay->startPoint.x, overlay->endPoint.x);
-				auto [minY, maxY] = std::minmax(overlay->startPoint.y, overlay->endPoint.y);
+				// 将全局坐标转换为窗口坐标用于绘制
+				int virtualX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+				int virtualY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+				
+				int minX = std::min(overlay->startPoint.x, overlay->endPoint.x) - virtualX;
+				int maxX = std::max(overlay->startPoint.x, overlay->endPoint.x) - virtualX;
+				int minY = std::min(overlay->startPoint.y, overlay->endPoint.y) - virtualY;
+				int maxY = std::max(overlay->startPoint.y, overlay->endPoint.y) - virtualY;
 
 				// 绘制选择框
 				SetBkMode(overlay->memDC, TRANSPARENT);
@@ -1079,9 +1206,14 @@ class ScreenshotApp {
 private:
 	HWND hwnd = nullptr;
 	NOTIFYICONDATA nid{};
-        // 不在此处持有 HDRScreenCapture，对象将在每次截图时临时创建
+        std::unique_ptr<HDRScreenCapture> screenCapture; // 复用capture实例提升性能
         std::unique_ptr<SelectionOverlay> overlay;
 	Config config;
+        
+        // 显示配置监控
+        UINT lastDisplayWidth = 0;
+        UINT lastDisplayHeight = 0;
+        DWORD lastDisplayChangeTime = 0;
 
 public:
 	bool Initialize() {
@@ -1107,7 +1239,18 @@ public:
 		// 加载配置
 		LoadConfig();
 
-                // HDRScreenCapture 不再在此持久化创建，改为截图时临时初始化
+                // 初始化显示配置监控
+                lastDisplayWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                lastDisplayHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                lastDisplayChangeTime = GetTickCount();
+
+                // 创建和初始化HDRScreenCapture实例
+                screenCapture = std::make_unique<HDRScreenCapture>();
+                screenCapture->SetConfig(&config);
+                if (!screenCapture->Initialize()) {
+                        MessageBox(nullptr, L"Failed to initialize screen capture", L"Warning", MB_OK);
+                        // 不要因为初始化失败就退出，后续还可以重试
+                }
 
 		// 创建选择覆盖窗口
 		overlay = std::make_unique<SelectionOverlay>();
@@ -1164,10 +1307,23 @@ private:
 				else if (key == "ShowNotification") config.showNotification = (value == "true");
                                 else if (key == "DebugMode") config.debugMode = (value == "true");
                                 else if (key == "UseACESFilmToneMapping") config.useACESFilmToneMapping = (value == "true");
-                                else if (key == "SDRBrightness") config.sdrBrightness = std::stof(value);
+                                else if (key == "SDRBrightness") {
+                                        try {
+                                                float brightness = std::stof(value);
+                                                config.sdrBrightness = std::clamp(brightness, 80.0f, 1000.0f);
+                                        } catch (...) {
+                                                config.sdrBrightness = 250.0f; // 默认值
+                                        }
+                                }
                                 else if (key == "FullscreenCurrentMonitor") config.fullscreenCurrentMonitor = (value == "true");
                                 else if (key == "RegionFullscreenMonitor") config.regionFullscreenMonitor = (value == "true");
-                                else if (key == "CaptureRetryCount") config.captureRetryCount = std::clamp(std::stoi(value), 1, 10);
+                                else if (key == "CaptureRetryCount") {
+                                        try {
+                                                config.captureRetryCount = std::clamp(std::stoi(value), 1, 10);
+                                        } catch (...) {
+                                                config.captureRetryCount = 3; // 默认值
+                                        }
+                                }
                         }
                 }
         }
@@ -1229,11 +1385,34 @@ private:
 		if (lower.find("ctrl") != std::string::npos) modifiers |= MOD_CONTROL;
 		if (lower.find("shift") != std::string::npos) modifiers |= MOD_SHIFT;
 		if (lower.find("alt") != std::string::npos) modifiers |= MOD_ALT;
+		if (lower.find("win") != std::string::npos) modifiers |= MOD_WIN;
 
-		// 简单的键码映射
-		if (lower.find("+a") != std::string::npos) vkey = 'A';
-		else if (lower.find("+s") != std::string::npos) vkey = 'S';
-                else if (lower.find("+d") != std::string::npos) vkey = 'D';
+		// 扩展的键码映射
+		auto pos = lower.find_last_of('+');
+		if (pos != std::string::npos && pos + 1 < lower.length()) {
+                        auto key = lower.substr(pos + 1);
+                        if (key.length() == 1 && key[0] >= 'a' && key[0] <= 'z') {
+                                vkey = static_cast<UINT>(std::toupper(key[0]));
+                        } else if (key == "f1") vkey = VK_F1;
+                        else if (key == "f2") vkey = VK_F2;
+                        else if (key == "f3") vkey = VK_F3;
+                        else if (key == "f4") vkey = VK_F4;
+                        else if (key == "f5") vkey = VK_F5;
+                        else if (key == "f6") vkey = VK_F6;
+                        else if (key == "f7") vkey = VK_F7;
+                        else if (key == "f8") vkey = VK_F8;
+                        else if (key == "f9") vkey = VK_F9;
+                        else if (key == "f10") vkey = VK_F10;
+                        else if (key == "f11") vkey = VK_F11;
+                        else if (key == "f12") vkey = VK_F12;
+                        else if (key == "space") vkey = VK_SPACE;
+                        else if (key == "tab") vkey = VK_TAB;
+                        else if (key == "enter") vkey = VK_RETURN;
+                        else if (key == "esc") vkey = VK_ESCAPE;
+                        else if (key.length() == 1 && key[0] >= '0' && key[0] <= '9') {
+                                vkey = static_cast<UINT>(key[0]);
+                        }
+                }
 
                 return { modifiers, vkey };
         }
@@ -1348,14 +1527,109 @@ private:
                 SaveConfig();
         }
 
+        bool EnsureCaptureReady() {
+                if (!screenCapture) {
+                        screenCapture = std::make_unique<HDRScreenCapture>();
+                        screenCapture->SetConfig(&config);
+                }
+                
+                // 检查显示配置是否发生变化
+                UINT currentWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                UINT currentHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                DWORD currentTime = GetTickCount();
+                
+                bool displayChanged = (currentWidth != lastDisplayWidth || 
+                                     currentHeight != lastDisplayHeight);
+                
+                if (displayChanged) {
+                        if (config.debugMode) {
+                                std::ofstream debug("debug.txt", std::ios::app);
+                                debug << "Display configuration changed: " << lastDisplayWidth << "x" << lastDisplayHeight 
+                                      << " -> " << currentWidth << "x" << currentHeight << std::endl;
+                        }
+                        
+                        lastDisplayWidth = currentWidth;
+                        lastDisplayHeight = currentHeight;
+                        lastDisplayChangeTime = currentTime;
+                        
+                        // 显示配置变化，强制重新初始化
+                        return screenCapture->Reinitialize();
+                }
+                
+                // 检查是否需要重新初始化
+                if (screenCapture->GetMonitors().empty()) {
+                        return screenCapture->Initialize();
+                }
+                
+                return true;
+        }
+
         template<class F>
         bool TryCapture(F&& func) {
                 int retries = std::max(1, config.captureRetryCount);
+                
                 for (int i = 0; i < retries; ++i) {
-                        if (func()) return true;
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                        auto result = func();
+                        if (result == HDRScreenCapture::CaptureResult::Success) return true;
+                        
+                        // 根据错误类型决定策略
+                        if (result == HDRScreenCapture::CaptureResult::NeedsReinitialization) {
+                                // 需要重新初始化 - 可能是显示器休眠/唤醒、分辨率变化、设备丢失等
+                                if (i < retries - 1) {
+                                        if (config.debugMode) {
+                                                std::ofstream debug("debug.txt", std::ios::app);
+                                                debug << "Reinitializing capture due to display configuration change (attempt " << (i+2) << "/" << retries << ")" << std::endl;
+                                        }
+                                        
+                                        if (!screenCapture->Reinitialize()) {
+                                                if (config.debugMode) {
+                                                        std::ofstream debug("debug.txt", std::ios::app);
+                                                        debug << "Reinitialization failed, will fallback to GDI" << std::endl;
+                                                }
+                                                break; // 重新初始化失败，直接fallback
+                                        }
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(200)); // 给显示器更多时间稳定
+                                }
+                        } else if (result == HDRScreenCapture::CaptureResult::NotSupported) {
+                                break; // 不支持的操作，直接fallback
+                        } else if (result == HDRScreenCapture::CaptureResult::TemporaryFailure) {
+                                // 临时失败，简单重试
+                                if (i < retries - 1) {
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                                }
+                        }
                 }
                 return false;
+        }
+
+        // 智能截图方法 - 先尝试DXGI，失败后fallback到GDI
+        bool SmartCapture(int x, int y, int width, int height, const std::string& filename = "") {
+                bool usedGDI = false;
+                
+                // 首先尝试DXGI截图
+                if (screenCapture && EnsureCaptureReady()) {
+                        bool dxgiSuccess = TryCapture([&] { 
+                                return screenCapture->CaptureRegion(x, y, width, height, filename); 
+                        });
+                        
+                        if (dxgiSuccess) {
+                                return true; // DXGI成功
+                        }
+                }
+                
+                // DXGI失败，尝试GDI fallback
+                if (screenCapture && screenCapture->CaptureRegionGDI(x, y, width, height, filename)) {
+                        usedGDI = true;
+                        
+                        // 如果检测到HDR并且使用了GDI，显示警告
+                        if (screenCapture->GetHDREnabled()) {
+                                ShowNotification(L"截图完成", L"使用GDI备用方式捕获，可能丢失HDR色彩信息");
+                        }
+                        
+                        return true;
+                }
+                
+                return false; // 所有方法都失败
         }
 
         void TakeRegionScreenshot() {
@@ -1374,16 +1648,15 @@ private:
                                         tm.tm_hour, tm.tm_min, tm.tm_sec);
                         }
 
-                        HDRScreenCapture cap;
-                        cap.SetConfig(&config);
-                        if (!cap.Initialize()) {
+                        // 确保capture实例可用，如果需要重新初始化
+                        if (!screenCapture || !EnsureCaptureReady()) {
                                 ShowNotification(L"截图失败");
                                 return;
                         }
 
                         int w = full.right - full.left;
                         int h = full.bottom - full.top;
-                        if (TryCapture([&] { return cap.CaptureRegion(full.left, full.top, w, h, filename.value_or("")); })) {
+                        if (SmartCapture(full.left, full.top, w, h, filename.value_or(""))) {
                                 if (config.saveToFile && filename) {
                                         ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                                 } else {
@@ -1414,24 +1687,26 @@ private:
 		}
 
                 bool success = false;
-                HDRScreenCapture cap;
-                cap.SetConfig(&config);
-                if (!cap.Initialize()) {
+                
+                if (!screenCapture || !EnsureCaptureReady()) {
                         ShowNotification(L"截图失败");
                         return;
                 }
+                
                 if (config.fullscreenCurrentMonitor) {
                         POINT pt; GetCursorPos(&pt);
-                        for (const auto& m : cap.GetMonitors()) {
+                        for (const auto& m : screenCapture->GetMonitors()) {
                                 if (PtInRect(&m.desktopRect, pt)) {
                                         int w = m.desktopRect.right - m.desktopRect.left;
                                         int h = m.desktopRect.bottom - m.desktopRect.top;
-                                        success = TryCapture([&] { return cap.CaptureRegion(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or("") ); });
+                                        success = SmartCapture(m.desktopRect.left, m.desktopRect.top, w, h, filename.value_or(""));
                                         break;
                                 }
                         }
                 } else {
-                        success = TryCapture([&] { return cap.CaptureFullscreen(filename.value_or("")); });
+                        success = SmartCapture(screenCapture->GetVirtualLeft(), screenCapture->GetVirtualTop(), 
+                                             screenCapture->GetVirtualWidth(), screenCapture->GetVirtualHeight(),
+                                             filename.value_or(""));
                 }
 
                 if (success) {
@@ -1468,17 +1743,16 @@ private:
 					tm.tm_hour, tm.tm_min, tm.tm_sec);
 			}
 
-                        int globalLeft = rect.left + GetSystemMetrics(SM_XVIRTUALSCREEN);
-                        int globalTop = rect.top + GetSystemMetrics(SM_YVIRTUALSCREEN);
+                        // selectedRect现在已经是全局坐标了
+                        int globalLeft = rect.left;
+                        int globalTop = rect.top;
 
-                        HDRScreenCapture cap;
-                        cap.SetConfig(&config);
-                        if (!cap.Initialize()) {
+                        if (!screenCapture || !EnsureCaptureReady()) {
                                 ShowNotification(L"截图失败");
                                 return;
                         }
 
-                        if (TryCapture([&] { return cap.CaptureRegion(globalLeft, globalTop, width, height, filename.value_or("")); })) {
+                        if (SmartCapture(globalLeft, globalTop, width, height, filename.value_or(""))) {
                                 if (config.saveToFile && filename) {
                                         ShowNotification(L"截图已保存", std::wstring(filename->begin(), filename->end()));
                                 }
@@ -1560,8 +1834,29 @@ private:
                         break;
 
                 case WM_DISPLAYCHANGE:
+                        // 显示配置改变 - 更新监控状态并强制重新初始化
+                        app->lastDisplayWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                        app->lastDisplayHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                        app->lastDisplayChangeTime = GetTickCount();
+                        
+                        if (app->screenCapture) {
+                                if (app->config.debugMode) {
+                                        std::ofstream debug("debug.txt", std::ios::app);
+                                        debug << "WM_DISPLAYCHANGE received, reinitializing capture..." << std::endl;
+                                }
+                                app->screenCapture->Reinitialize();
+                        }
+                        break;
+                        
                 case WM_DEVICECHANGE:
-                        // 截图时会重新初始化设备，此处无需处理
+                        // 设备变化 - 可能是显示器热插拔
+                        if (app->screenCapture) {
+                                if (app->config.debugMode) {
+                                        std::ofstream debug("debug.txt", std::ios::app);
+                                        debug << "WM_DEVICECHANGE received, reinitializing capture..." << std::endl;
+                                }
+                                app->screenCapture->Reinitialize();
+                        }
                         break;
 
                 case WM_POWERBROADCAST:
