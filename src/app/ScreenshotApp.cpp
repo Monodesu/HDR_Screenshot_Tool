@@ -361,26 +361,28 @@ namespace screenshot_tool {
 			return;
 		}
 		
-		// 将缓存的图像数据传递给overlay用作背景
-		ImageBuffer rgb8Image;
-		if (capture_.GetCachedImageAsRGB8(rgb8Image)) {
-			Logger::Info(L"Setting background image for overlay: {}x{}", rgb8Image.width, rgb8Image.height);
-			overlay_.SetBackgroundImage(rgb8Image.data.data(), 
-			                          rgb8Image.width, 
-			                          rgb8Image.height, 
-			                          rgb8Image.stride);
-		} else {
-			Logger::Warn(L"Failed to get RGB8 cached image for overlay background");
-			overlay_.SetBackgroundImage(nullptr, 0, 0, 0); // 清除背景
-		}
-		
-		// 然后显示 overlay 进行区域选择
-		// 如果支持多显示器区域选择，可以传递overlayRect给overlay
+		// 首先显示overlay，不设置背景图像
+		Logger::Info(L"Showing overlay without background, will wait for background data");
 		if (cfg_.regionFullscreenMonitor) {
             overlay_.BeginSelectOnMonitor(overlayRect);
         } else {
             overlay_.BeginSelect();
         }
+        
+        // 启动背景检测循环
+        overlay_.StartWaitingForBackground([this]() {
+            // 尝试获取缓存的图像数据
+            ImageBuffer rgb8Image;
+            if (capture_.GetCachedImageAsRGB8(rgb8Image)) {
+                Logger::Info(L"Background data ready! Setting background image for overlay: {}x{}", rgb8Image.width, rgb8Image.height);
+                overlay_.SetBackgroundImage(rgb8Image.data.data(), 
+                                          rgb8Image.width, 
+                                          rgb8Image.height, 
+                                          rgb8Image.stride);
+            } else {
+                Logger::Debug(L"Background data not ready yet, continuing to wait...");
+            }
+        });
 	}
 
 	// ----------------------------------------------------------------------------

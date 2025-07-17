@@ -17,6 +17,9 @@ namespace screenshot_tool {
         
         // 设置背景图像（用于显示冻结的屏幕内容）
         void SetBackgroundImage(const uint8_t* imageData, int width, int height, int stride);
+        
+        // 开始等待背景图像准备就绪
+        void StartWaitingForBackground(std::function<void()> backgroundCheckCallback);
 
     private:
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -53,6 +56,12 @@ namespace screenshot_tool {
         static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度
         static constexpr BYTE FADE_STEP = 20;      // 每次淡入淡出的步长
         static constexpr UINT FADE_INTERVAL = 16; // 约60FPS的更新间隔
+        
+        // 背景检测定时器
+        UINT_PTR backgroundCheckTimerId_ = 0;
+        static constexpr UINT_PTR BACKGROUND_CHECK_TIMER_ID = 2;
+        static constexpr UINT BACKGROUND_CHECK_INTERVAL = 100; // 100ms检测间隔
+        std::function<void()> backgroundCheckCallback_;
         
         // 双缓冲绘制
         HDC memDC_ = nullptr;
