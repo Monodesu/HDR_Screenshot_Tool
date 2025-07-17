@@ -5,18 +5,169 @@
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="头文件">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
-    </Filter>
     <Filter Include="资源文件">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="源文件\platform">
+      <UniqueIdentifier>{85ec2e2b-6782-4321-b356-b3edae7b14c3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\config">
+      <UniqueIdentifier>{ecb4fbdd-55ec-4433-b864-ddc49acf5718}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\util">
+      <UniqueIdentifier>{d2ba17d7-a894-40a2-b364-b7d2056fbc82}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\image">
+      <UniqueIdentifier>{f125688d-f7ad-4d26-bde6-ce8129ce288e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\capture">
+      <UniqueIdentifier>{be23e720-1824-4212-8472-3cd0da26101a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ui">
+      <UniqueIdentifier>{69c18197-7907-4ed2-95fc-27160a83f7e9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\app">
+      <UniqueIdentifier>{e26ad88b-47cf-4c68-8f45-508da1035ce8}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="HDR_Screenshot_Tool.cpp">
-      <Filter>源文件</Filter>
+    <ClInclude Include="src\platform\WinGDIPlusInit.hpp">
+      <Filter>源文件\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="src\platform\WinHeaders.hpp">
+      <Filter>源文件\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="src\platform\WinNotification.hpp">
+      <Filter>源文件\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="src\platform\WinShell.hpp">
+      <Filter>源文件\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="src\config\Config.hpp">
+      <Filter>源文件\config</Filter>
+    </ClInclude>
+    <ClInclude Include="src\util\Logger.hpp">
+      <Filter>源文件\util</Filter>
+    </ClInclude>
+    <ClInclude Include="src\util\PathUtils.hpp">
+      <Filter>源文件\util</Filter>
+    </ClInclude>
+    <ClInclude Include="src\util\TimeUtils.hpp">
+      <Filter>源文件\util</Filter>
+    </ClInclude>
+    <ClInclude Include="src\util\HotkeyParse.hpp">
+      <Filter>源文件\util</Filter>
+    </ClInclude>
+    <ClInclude Include="src\util\ScopedWin.hpp">
+      <Filter>源文件\util</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\ImageBuffer.hpp">
+      <Filter>源文件\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\ColorSpace.hpp">
+      <Filter>源文件\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\ToneMapping.hpp">
+      <Filter>源文件\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\PixelConvert.hpp">
+      <Filter>源文件\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\ClipboardWriter.hpp">
+      <Filter>源文件\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\ImageSaverPNG.hpp">
+      <Filter>源文件\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\capture\CaptureCommon.hpp">
+      <Filter>源文件\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="src\capture\DXGICapture.hpp">
+      <Filter>源文件\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="src\capture\GDICapture.hpp">
+      <Filter>源文件\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="src\capture\SmartCapture.hpp">
+      <Filter>源文件\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\SelectionOverlay.hpp">
+      <Filter>源文件\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\TrayIcon.hpp">
+      <Filter>源文件\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\HotkeyManager.hpp">
+      <Filter>源文件\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\ScreenshotApp.hpp">
+      <Filter>源文件\app</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\platform\WinShell.cpp">
+      <Filter>源文件\platform</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform\WinNotification.cpp">
+      <Filter>源文件\platform</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform\WinGDIPlusInit.cpp">
+      <Filter>源文件\platform</Filter>
+    </ClCompile>
+    <ClCompile Include="src\config\Config.cpp">
+      <Filter>源文件\config</Filter>
+    </ClCompile>
+    <ClCompile Include="src\util\Logger.cpp">
+      <Filter>源文件\util</Filter>
+    </ClCompile>
+    <ClCompile Include="src\util\PathUtils.cpp">
+      <Filter>源文件\util</Filter>
+    </ClCompile>
+    <ClCompile Include="src\util\TimeUtils.cpp">
+      <Filter>源文件\util</Filter>
+    </ClCompile>
+    <ClCompile Include="src\util\HotkeyParse.cpp">
+      <Filter>源文件\util</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image\ColorSpace .cpp">
+      <Filter>源文件\image</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image\ToneMapping.cpp">
+      <Filter>源文件\image</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image\PixelConvert.cpp">
+      <Filter>源文件\image</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image\ClipboardWriter.cpp">
+      <Filter>源文件\image</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image\ImageSaverPNG.cpp">
+      <Filter>源文件\image</Filter>
+    </ClCompile>
+    <ClCompile Include="src\capture\DXGICapture.cpp">
+      <Filter>源文件\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="src\capture\GDICapture.cpp">
+      <Filter>源文件\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="src\capture\SmartCapture.cpp">
+      <Filter>源文件\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\SelectionOverlay.cpp">
+      <Filter>源文件\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrayIcon.cpp">
+      <Filter>源文件\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\HotkeyManager.cpp">
+      <Filter>源文件\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\ScreenshotApp.cpp">
+      <Filter>源文件\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\WinMain.cpp">
+      <Filter>源文件\app</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

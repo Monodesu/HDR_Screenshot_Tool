@@ -18,6 +18,55 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\app\ScreenshotApp.hpp" />
+    <ClInclude Include="src\capture\CaptureCommon.hpp" />
+    <ClInclude Include="src\capture\DXGICapture.hpp" />
+    <ClInclude Include="src\capture\GDICapture.hpp" />
+    <ClInclude Include="src\capture\SmartCapture.hpp" />
+    <ClInclude Include="src\config\Config.hpp" />
+    <ClInclude Include="src\image\ClipboardWriter.hpp" />
+    <ClInclude Include="src\image\ColorSpace.hpp" />
+    <ClInclude Include="src\image\ImageBuffer.hpp" />
+    <ClInclude Include="src\image\ImageSaverPNG.hpp" />
+    <ClInclude Include="src\image\PixelConvert.hpp" />
+    <ClInclude Include="src\image\ToneMapping.hpp" />
+    <ClInclude Include="src\platform\WinGDIPlusInit.hpp" />
+    <ClInclude Include="src\platform\WinHeaders.hpp" />
+    <ClInclude Include="src\platform\WinNotification.hpp" />
+    <ClInclude Include="src\platform\WinShell.hpp" />
+    <ClInclude Include="src\ui\HotkeyManager.hpp" />
+    <ClInclude Include="src\ui\SelectionOverlay.hpp" />
+    <ClInclude Include="src\ui\TrayIcon.hpp" />
+    <ClInclude Include="src\util\HotkeyParse.hpp" />
+    <ClInclude Include="src\util\Logger.hpp" />
+    <ClInclude Include="src\util\PathUtils.hpp" />
+    <ClInclude Include="src\util\ScopedWin.hpp" />
+    <ClInclude Include="src\util\TimeUtils.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\app\ScreenshotApp.cpp" />
+    <ClCompile Include="src\app\WinMain.cpp" />
+    <ClCompile Include="src\capture\DXGICapture.cpp" />
+    <ClCompile Include="src\capture\GDICapture.cpp" />
+    <ClCompile Include="src\capture\SmartCapture.cpp" />
+    <ClCompile Include="src\config\Config.cpp" />
+    <ClCompile Include="src\image\ClipboardWriter.cpp" />
+    <ClCompile Include="src\image\ColorSpace .cpp" />
+    <ClCompile Include="src\image\ImageSaverPNG.cpp" />
+    <ClCompile Include="src\image\PixelConvert.cpp" />
+    <ClCompile Include="src\image\ToneMapping.cpp" />
+    <ClCompile Include="src\platform\WinGDIPlusInit.cpp" />
+    <ClCompile Include="src\platform\WinNotification.cpp" />
+    <ClCompile Include="src\platform\WinShell.cpp" />
+    <ClCompile Include="src\ui\HotkeyManager.cpp" />
+    <ClCompile Include="src\ui\SelectionOverlay.cpp" />
+    <ClCompile Include="src\ui\TrayIcon.cpp" />
+    <ClCompile Include="src\util\HotkeyParse.cpp" />
+    <ClCompile Include="src\util\Logger.cpp" />
+    <ClCompile Include="src\util\PathUtils.cpp" />
+    <ClCompile Include="src\util\TimeUtils.cpp" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -124,9 +173,6 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <ClCompile Include="HDR_Screenshot_Tool.cpp" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
