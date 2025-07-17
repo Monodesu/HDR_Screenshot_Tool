@@ -14,6 +14,20 @@ namespace screenshot_tool {
         return hwnd_ != nullptr;
     }
 
+    SelectionOverlay::~SelectionOverlay() {
+        // 清理定时器
+        if (timerId_ && hwnd_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
+        }
+        
+        // 销毁窗口
+        if (hwnd_) {
+            DestroyWindow(hwnd_);
+            hwnd_ = nullptr;
+        }
+    }
+
     void SelectionOverlay::Show() {
         if (!hwnd_) return; 
         
@@ -38,15 +52,27 @@ namespace screenshot_tool {
         
         SetWindowPos(hwnd_, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_SHOWWINDOW);
         
-        // 立即显示暗化效果 - 透明度设置为可见的暗化
-        SetLayeredWindowAttributes(hwnd_, 0, 200, LWA_ALPHA);
+        // 开始淡入动画
+        startFadeIn();
         
         InvalidateRect(hwnd_, nullptr, TRUE);
     }
 
     void SelectionOverlay::Hide() {
-        if (!hwnd_) return; 
-        ShowWindow(hwnd_, SW_HIDE);
+        if (!hwnd_) return;
+        
+        // 如果正在选择，直接隐藏；否则开始淡出动画
+        if (selecting_) {
+            // 停止任何进行中的动画
+            if (timerId_) {
+                KillTimer(hwnd_, timerId_);
+                timerId_ = 0;
+            }
+            fadingIn_ = fadingOut_ = false;
+            ShowWindow(hwnd_, SW_HIDE);
+        } else {
+            startFadeOut();
+        }
     }
 
     bool SelectionOverlay::IsValid() const {
@@ -81,10 +107,80 @@ namespace screenshot_tool {
                     monitorRect.bottom - monitorRect.top, 
                     SWP_SHOWWINDOW);
         
-        // 立即显示暗化效果 - 透明度设置为可见的暗化
-        SetLayeredWindowAttributes(hwnd_, 0, 200, LWA_ALPHA);
+        // 开始淡入动画
+        startFadeIn();
         
         InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+
+    // ---- 淡入淡出动画实现 ----
+    void SelectionOverlay::startFadeIn() {
+        // 停止之前的动画
+        if (timerId_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
+        }
+        
+        // 初始化淡入状态
+        alpha_ = 0;
+        fadingIn_ = true;
+        fadingOut_ = false;
+        
+        // 设置初始透明度
+        SetLayeredWindowAttributes(hwnd_, 0, alpha_, LWA_ALPHA);
+        
+        // 启动定时器
+        timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
+    }
+
+    void SelectionOverlay::startFadeOut() {
+        // 停止之前的动画
+        if (timerId_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
+        }
+        
+        // 初始化淡出状态
+        fadingIn_ = false;
+        fadingOut_ = true;
+        
+        // 启动定时器
+        timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
+    }
+
+    void SelectionOverlay::updateFade() {
+        if (fadingIn_) {
+            alpha_ += FADE_STEP;
+            if (alpha_ >= TARGET_ALPHA) {
+                alpha_ = TARGET_ALPHA;
+                fadingIn_ = false;
+                onFadeComplete();
+            }
+        } else if (fadingOut_) {
+            if (alpha_ <= FADE_STEP) {
+                alpha_ = 0;
+                fadingOut_ = false;
+                onFadeComplete();
+            } else {
+                alpha_ -= FADE_STEP;
+            }
+        }
+        
+        // 更新窗口透明度
+        SetLayeredWindowAttributes(hwnd_, 0, alpha_, LWA_ALPHA);
+    }
+
+    void SelectionOverlay::onFadeComplete() {
+        // 停止定时器
+        if (timerId_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
+        }
+        
+        // 如果淡出完成，隐藏窗口
+        if (!fadingIn_ && !fadingOut_ && alpha_ == 0) {
+            ShowWindow(hwnd_, SW_HIDE);
+        }
     }
 
     void SelectionOverlay::startSelect(int x, int y) { 
@@ -131,24 +227,23 @@ namespace screenshot_tool {
             std::max(start_.y, cur_.y) 
         }; 
         
-        // 如果使用显示器约束，需要将窗口坐标转换为屏幕坐标
-        if (useMonitorConstraint_) {
-            RECT windowRect;
-            GetWindowRect(hwnd_, &windowRect);
-            
-            selectedRect.left += windowRect.left;
-            selectedRect.top += windowRect.top;
-            selectedRect.right += windowRect.left;
-            selectedRect.bottom += windowRect.top;
-        }
+        // 将窗口坐标转换为屏幕坐标
+        // 无论是否使用显示器约束，都需要进行坐标转换
+        RECT windowRect;
+        GetWindowRect(hwnd_, &windowRect);
         
-        // 立即隐藏窗口
-        ShowWindow(hwnd_, SW_HIDE);
+        selectedRect.left += windowRect.left;
+        selectedRect.top += windowRect.top;
+        selectedRect.right += windowRect.left;
+        selectedRect.bottom += windowRect.top;
         
         // 立即触发回调
         if (cb_) {
             cb_(selectedRect);
         }
+        
+        // 开始淡出动画
+        startFadeOut();
     }
 
     LRESULT CALLBACK SelectionOverlay::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) { SelectionOverlay* self = (SelectionOverlay*)GetWindowLongPtr(h, GWLP_USERDATA); if (m == WM_NCCREATE) { CREATESTRUCT* cs = (CREATESTRUCT*)l; SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams); return DefWindowProc(h, m, w, l); }if (!self)return DefWindowProc(h, m, w, l); return self->instanceProc(h, m, w, l); }
@@ -158,6 +253,11 @@ namespace screenshot_tool {
         case WM_LBUTTONDOWN: startSelect(GET_X_LPARAM(l), GET_Y_LPARAM(l)); break;
         case WM_MOUSEMOVE:   if (selecting_) updateSelect(GET_X_LPARAM(l), GET_Y_LPARAM(l)); break;
         case WM_LBUTTONUP:   finishSelect(); break;
+        case WM_TIMER:
+            if (w == FADE_TIMER_ID) {
+                updateFade();
+            }
+            break;
         case WM_PAINT: { 
             PAINTSTRUCT ps; 
             HDC dc = BeginPaint(h, &ps); 
