@@ -32,13 +32,13 @@ namespace screenshot_tool {
 
     HMENU TrayIcon::BuildContextMenu(bool autoStart, bool saveToFile) {
         HMENU menu = CreatePopupMenu();
-        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_REGION, L"ÇøÓò½ØÍ¼(&R)");
-        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_FULLSCREEN, L"È«ÆÁ½ØÍ¼(&F)");
+        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_REGION, L"ï¿½ï¿½ï¿½ï¿½ï¿½Í¼(&R)");
+        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_FULLSCREEN, L"È«ï¿½ï¿½ï¿½ï¿½Í¼(&F)");
         AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenu(menu, MF_STRING | (autoStart ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_AUTOSTART, L"¿ª»úÆô¶¯(&S)");
-        AppendMenu(menu, MF_STRING | (saveToFile ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_SAVEFILE, L"±£´æµ½ÎÄ¼þ(&V)");
+        AppendMenu(menu, MF_STRING | (autoStart ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_AUTOSTART, L"ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½(&S)");
+        AppendMenu(menu, MF_STRING | (saveToFile ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_SAVEFILE, L"ï¿½ï¿½ï¿½æµ½ï¿½Ä¼ï¿½(&V)");
         AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenu(menu, MF_STRING, IDM_TRAY_EXIT, L"ÍË³ö(&X)");
+        AppendMenu(menu, MF_STRING, IDM_TRAY_EXIT, L"ï¿½Ë³ï¿½(&X)");
         return menu;
     }
 

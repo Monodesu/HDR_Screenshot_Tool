@@ -16,20 +16,21 @@ namespace screenshot_tool {
     }
 
     bool DXGICapture::initDxgiObjects() {
-        // TODO: ÕæÊµ DXGI Ã¶¾Ù + DuplicateOutput1; µ±Ç° stub
+        // TODO: ï¿½ï¿½Êµ DXGI Ã¶ï¿½ï¿½ + DuplicateOutput1; ï¿½ï¿½Ç° stub
         virtualRect_ = { 0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN) };
         return true;
     }
 
     void DXGICapture::detectHDR() {
-        // TODO: ÕæÊµ HDR ¼ì²â£»µ±Ç°¼ÙÉè SDR
+        // TODO: ï¿½ï¿½Êµ HDR ï¿½ï¿½â£»ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ SDR
         hdrEnabled_ = false;
     }
 
-    CaptureResult DXGICapture::CaptureRegion(int x, int y, int w, int h, ImageBuffer& out) {
-        // TODO: ÕæÕı GPU ¸´ÖÆ£»µ±Ç° stub Êä³ö¿Õ buffer
+    CaptureResult DXGICapture::CaptureRegion(int x, int y, int w, int h, DXGI_FORMAT& fmt, ImageBuffer& out) {
+        // TODO: ï¿½ï¿½ï¿½ï¿½ GPU ï¿½ï¿½ï¿½Æ£ï¿½ï¿½ï¿½Ç° stub ï¿½ï¿½ï¿½ï¿½ï¿½ buffer
+        fmt = DXGI_FORMAT_B8G8R8A8_UNORM; // è®¾ç½®è¾“å‡ºæ ¼å¼
         out.format = PixelFormat::BGRA8; out.width = w; out.height = h; out.stride = w * 4; out.data.resize(out.stride * h);
-        std::fill(out.data.begin(), out.data.end(), 0x80); // »ÒÉ«
+        std::fill(out.data.begin(), out.data.end(), 0x80); // ï¿½ï¿½É«
         return CaptureResult::Success;
     }
 

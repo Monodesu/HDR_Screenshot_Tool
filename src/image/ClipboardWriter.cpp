@@ -4,9 +4,9 @@
 #include <vector>
 
 namespace screenshot_tool {
-	bool WriteRGB(HWND, const uint8_t* rgb, int w, int h) {
-		// TODO: 真实实现；当前直接返回 false 以便调试分层
-		(void)rgb; (void)w; (void)h;
+	bool ClipboardWriter::WriteRGB(HWND hwnd, const uint8_t* rgb, int w, int h) {
+		// TODO: 寰呭疄鐜帮紝鐩墠鐩存帴杩斿洖 false 浠ヤ究缂栬瘧閫氳繃
+		(void)hwnd; (void)rgb; (void)w; (void)h;
 		return false;
 	}
 } // namespace screenshot_tool

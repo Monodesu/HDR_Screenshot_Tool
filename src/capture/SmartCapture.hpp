@@ -19,14 +19,17 @@ namespace screenshot_tool {
             Failed         // 两种后端都失败
         };
 
-        explicit SmartCapture(Config* cfg) : cfg_(cfg), dxgi_(cfg), gdi_(cfg) {}
+        explicit SmartCapture(Config* cfg) : cfg_(cfg), dxgi_(), gdi_() {}
 
         // ---- 初始化 -------------------------------------------------------------
         bool Initialize();            // 必须在捕获前调用一次（App 启动时）
 
         // ---- 主入口 -------------------------------------------------------------
-        Result CaptureToFileAndClipboard(const RECT& r, const wchar_t* savePath);
-        Result CaptureFullscreen(const RECT& virtualRect, const wchar_t* savePath);
+        Result CaptureToFileAndClipboard(HWND hwnd, const RECT& r, const wchar_t* savePath);
+        Result CaptureFullscreen(HWND hwnd, const RECT& virtualRect, const wchar_t* savePath);
+        
+        // ---- 工具方法 -----------------------------------------------------------
+        RECT GetVirtualDesktop() const;
 
     private:
         // 区域抓屏到 ImageBuffer (8‑bit RGB)

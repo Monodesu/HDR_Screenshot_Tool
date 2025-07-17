@@ -6,8 +6,8 @@ namespace screenshot_tool {
 
 	class ImageSaverPNG {
 	public:
-		// ±£´æ RGB8 Êı¾İÎª PNG£¨Ê¹ÓÃ GDI+£©
-		bool SaveRGBToPNG(const std::wstring& path, const uint8_t* rgb, int w, int h);
+		// ä¿å­˜ RGB8 æ•°æ®ä¸º PNGï¼Œä½¿ç”¨ GDI+
+		static bool SaveRGBToPNG(const uint8_t* rgb, int w, int h, const wchar_t* savePath);
 	};
 
 } // namespace screenshot_tool

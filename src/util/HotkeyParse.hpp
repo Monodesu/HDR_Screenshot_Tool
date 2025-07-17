@@ -1,11 +1,15 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include "../platform/WinHeaders.hpp"
 
 namespace screenshot_tool {
 
-	// ½âÎöÀàËÆ "ctrl+shift+alt+a" ¡ú modifiers + VK_A
-	// ·µ»Ø true ³É¹¦
-	bool ParseHotkey(const std::string& text, UINT& outModifiers, UINT& outVk);
+	class HotkeyParse {
+	public:
+		// è§£æçƒ­é”®å­—ç¬¦ä¸² "ctrl+shift+alt+a" ä¸º modifiers + VK_A
+		// è¿”å› true æˆåŠŸ
+		static bool ParseHotkey(const std::string& text, UINT& outModifiers, UINT& outVk);
+	};
 
 } // namespace screenshot_tool

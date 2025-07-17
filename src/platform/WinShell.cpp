@@ -5,7 +5,7 @@
 namespace fs = std::filesystem;
 namespace screenshot_tool {
 
-    std::wstring GetStartupFolder() {
+    std::wstring WinShell::GetStartupFolder() {
         PWSTR path = nullptr;
         if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Startup, 0, nullptr, &path))) {
             std::wstring ret(path);
@@ -15,8 +15,8 @@ namespace screenshot_tool {
         return L"";
     }
 
-    bool CreateStartupShortcut(const std::wstring& exePath, const std::wstring& linkName) {
-        std::wstring startup = GetStartupFolder();
+    bool WinShell::CreateStartupShortcut(const std::wstring& exePath, const std::wstring& linkName) {
+        std::wstring startup = WinShell::GetStartupFolder();
         if (startup.empty()) return false;
         std::wstring linkPath = startup + L"\\" + linkName;
 
@@ -30,16 +30,16 @@ namespace screenshot_tool {
         return SUCCEEDED(pf->Save(linkPath.c_str(), TRUE));
     }
 
-    bool RemoveStartupShortcut(const std::wstring& linkName) {
-        std::wstring startup = GetStartupFolder();
+    bool WinShell::RemoveStartupShortcut(const std::wstring& linkName) {
+        std::wstring startup = WinShell::GetStartupFolder();
         if (startup.empty()) return false;
         std::wstring linkPath = startup + L"\\" + linkName;
         std::error_code ec;
         return std::filesystem::remove(linkPath, ec);
     }
 
-    bool IsStartupShortcutPresent(const std::wstring& linkName) {
-        std::wstring startup = GetStartupFolder();
+    bool WinShell::IsStartupShortcutPresent(const std::wstring& linkName) {
+        std::wstring startup = WinShell::GetStartupFolder();
         if (startup.empty()) return false;
         std::wstring linkPath = startup + L"\\" + linkName;
         return std::filesystem::exists(linkPath);

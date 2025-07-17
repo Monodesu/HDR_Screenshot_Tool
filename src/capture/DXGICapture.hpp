@@ -4,6 +4,7 @@
 #include "../config/Config.hpp"
 #include "../platform/WinHeaders.hpp"
 #include <vector>
+#include <dxgi.h>
 
 namespace screenshot_tool {
 
@@ -18,8 +19,8 @@ namespace screenshot_tool {
         HDRMetadata GetHDRMetadata() const { return hdrMeta_; }
         RECT GetVirtualRect() const { return virtualRect_; }
 
-        // ÇøÓò×¥ÆÁ£ºÈ¡Ô­Ê¼¸ñÊ½ (ºóÐø½«²¹³ä HDR ÅÐ¶¨ & ×ª»»)
-        CaptureResult CaptureRegion(int x, int y, int w, int h, ImageBuffer& out);
+        // ï¿½ï¿½ï¿½ï¿½×¥ï¿½ï¿½ï¿½ï¿½È¡Ô­Ê¼ï¿½ï¿½Ê½ (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ HDR ï¿½Ð¶ï¿½ & ×ªï¿½ï¿½)
+        CaptureResult CaptureRegion(int x, int y, int w, int h, DXGI_FORMAT& fmt, ImageBuffer& out);
 
     private:
         bool initialized_ = false;
@@ -27,7 +28,7 @@ namespace screenshot_tool {
         HDRMetadata hdrMeta_{};
         RECT virtualRect_{};
 
-        // DXGI ¶ÔÏó¼¯ºÏ (ÔÝÖ»×¥µÚÒ»ÏÔÊ¾Æ÷£»ºóÐøÀ©Õ¹)
+        // DXGI ï¿½ï¿½ï¿½ó¼¯ºï¿½ (ï¿½ï¿½Ö»×¥ï¿½ï¿½Ò»ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¹)
         Microsoft::WRL::ComPtr<IDXGIOutputDuplication> dupl_;
         Microsoft::WRL::ComPtr<ID3D11Device>          device_;
         Microsoft::WRL::ComPtr<ID3D11DeviceContext>   context_;

@@ -40,4 +40,26 @@ namespace screenshot_tool {
         return name;
     }
 
+    bool PathUtils::IsAbsolute(const std::wstring& path)
+    {
+        return fs::path(path).is_absolute();
+    }
+
+    std::wstring PathUtils::GetModuleDirectoryW()
+    {
+        return GetExeDirW();
+    }
+
+    void PathUtils::JoinInplace(std::wstring& basePath, const std::wstring& subPath)
+    {
+        fs::path base(basePath);
+        base /= subPath;
+        basePath = base.wstring();
+    }
+
+    bool PathUtils::CreateDirectoriesRecursive(const std::wstring& path)
+    {
+        return EnsureDirectory(path);
+    }
+
 } // namespace screenshot_tool

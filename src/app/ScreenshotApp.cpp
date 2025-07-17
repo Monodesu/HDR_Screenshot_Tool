@@ -1,9 +1,10 @@
-#include "../platform/WinHeaders.hpp"
+ï»¿#include "../platform/WinHeaders.hpp"
 #include "ScreenshotApp.hpp"
 
 #include "../config/Config.hpp"
 #include "../util/Logger.hpp"
 #include "../util/PathUtils.hpp"
+#include "../util/StringUtils.hpp"
 #include "../util/TimeUtils.hpp"
 #include "../ui/TrayIcon.hpp"
 #include "../ui/HotkeyManager.hpp"
@@ -19,35 +20,27 @@
 #include <cassert>
 
 // ============================================================================
-// ±¾µØ³£Á¿ & ºê
+// ï¿½ï¿½ï¿½Ø³ï¿½ï¿½ï¿½ & ï¿½ï¿½
 // ============================================================================
 namespace screenshot_tool {
 
-	// ×Ô¶¨ÒåÍÐÅÌÍ¼±êÏûÏ¢ ID
+	// ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¼ï¿½ï¿½ï¿½ï¿½Ï¢ ID
 	static constexpr UINT WM_ST_TRAYICON = WM_APP + 1;
-	// ×Ô¶¨Òå Overlay Óë App Í¨ÐÅ£¨Overlay Íê³ÉÑ¡ÔñÊ± PostMessage£©
+	// ï¿½Ô¶ï¿½ï¿½ï¿½ Overlay ï¿½ï¿½ App Í¨ï¿½Å£ï¿½Overlay ï¿½ï¿½ï¿½Ñ¡ï¿½ï¿½Ê± PostMessageï¿½ï¿½
 	static constexpr UINT WM_ST_REGION_DONE = WM_APP + 2;
 
-	// ÍÐÅÌ²Ëµ¥ÃüÁî ID
-	enum : UINT {
-		IDM_TRAY_CAPTURE_REGION = 1001,
-		IDM_TRAY_CAPTURE_FULLSCREEN,
-		IDM_TRAY_OPEN_FOLDER,
-		IDM_TRAY_TOGGLE_AUTOSTART,
-		IDM_TRAY_EXIT
-	};
 
-	// ÈÈ¼ü ID£¨Óë HotkeyManager ÄÚ²¿±£³ÖÒ»ÖÂ»òÓ³Éä£©
+	// ï¿½È¼ï¿½ IDï¿½ï¿½ï¿½ï¿½ HotkeyManager ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Â»ï¿½Ó³ï¿½ä£©
 	static constexpr int HOTKEY_ID_REGION = 1;
 	static constexpr int HOTKEY_ID_FULLSCREEN = 2;
 
 	// ----------------------------------------------------------------------------
-	// ¹¤¾ß£º´´½¨ÆÁÄ»½ØÍ¼±£´æÄ¿Â¼£¨Èç¹û²»´æÔÚÔò×Ô¶¯´´½¨£©
+	// ï¿½ï¿½ï¿½ß£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä»ï¿½ï¿½Í¼ï¿½ï¿½ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	static std::wstring ensureSaveDir(const Config& cfg) {
-		std::wstring dirW = PathUtils::Utf8ToWide(cfg.savePath.c_str());
+		std::wstring dirW = StringUtils::Utf8ToWide(cfg.savePath);
 		if (dirW.empty()) {
-			// Ä¬ÈÏ£ºµ±Ç°¹¤×÷Ä¿Â¼ÏÂ Screenshots
+			// Ä¬ï¿½Ï£ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ Screenshots
 			dirW = L"Screenshots";
 		}
 		if (!PathUtils::IsAbsolute(dirW)) {
@@ -55,15 +48,15 @@ namespace screenshot_tool {
 			PathUtils::JoinInplace(exeDir, dirW); // exeDir += L"\\" + dirW
 			dirW = exeDir;
 		}
-		PathUtils::CreateDirectoriesRecursive(dirW.c_str());
+		PathUtils::CreateDirectoriesRecursive(dirW);
 		return dirW;
 	}
 
 	// ----------------------------------------------------------------------------
-	// ScreenshotApp ÊµÏÖ
+	// ScreenshotApp Êµï¿½ï¿½
 	// ----------------------------------------------------------------------------
-	ScreenshotApp::ScreenshotApp() : capture_(&cfg_) {}
-	{
+	ScreenshotApp::ScreenshotApp() : capture_(&cfg_) {
+
 	}
 
 	ScreenshotApp::~ScreenshotApp() {
@@ -73,14 +66,14 @@ namespace screenshot_tool {
 	bool ScreenshotApp::Initialize(HINSTANCE hInst) {
 		hInst_ = hInst;
 
-		// 1) ¼ÓÔØÅäÖÃ
-		LoadConfig(cfg_); // Config.cpp Ìá¹©ÊµÏÖ
-		HDRSHOT_LOG_INFO("Config loaded.");
+		// 1) ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+		LoadConfig(cfg_); // Config.cpp ï¿½á¹©Êµï¿½ï¿½
+		Logger::Info(L"Config loaded.");
 
-		// 2) ×Ô¶¯´´½¨±£´æÄ¿Â¼£¨¸ù¾ÝÅäÖÃ£©
+		// 2) ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã£ï¿½
 		ensureSaveDir(cfg_);
 
-		// 3) ×¢²á´°¿ÚÀà & ´´½¨Òþ²ØÖ÷´°¿Ú£¨ÓÃÓÚÏûÏ¢·Ö·¢ / ÍÐÅÌ / ÈÈ¼ü£©
+		// 3) ×¢ï¿½á´°ï¿½ï¿½ï¿½ï¿½ & ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½Ö·ï¿½ / ï¿½ï¿½ï¿½ï¿½ / ï¿½È¼ï¿½ï¿½ï¿½
 		const wchar_t* kClassName = L"HDRScreenshotAppWnd";
 		WNDCLASSEX wc{ sizeof(WNDCLASSEX) };
 		wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -88,14 +81,14 @@ namespace screenshot_tool {
 		wc.cbClsExtra = 0;
 		wc.cbWndExtra = sizeof(LONG_PTR);
 		wc.hInstance = hInst_;
-		wc.hIcon = LoadIcon(hInst_, MAKEINTRESOURCE(1)); // ×ÊÔ´ÖÐµÚ1ºÅÍ¼±êÕ¼Î»
+		wc.hIcon = LoadIcon(hInst_, MAKEINTRESOURCE(1)); // ï¿½ï¿½Ô´ï¿½Ðµï¿½1ï¿½ï¿½Í¼ï¿½ï¿½Õ¼Î»
 		wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 		wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
 		wc.lpszMenuName = nullptr;
 		wc.lpszClassName = kClassName;
 		wc.hIconSm = LoadIcon(hInst_, MAKEINTRESOURCE(1));
 		if (!RegisterClassEx(&wc)) {
-			HDRSHOT_LOG_ERROR("RegisterClassEx failed");
+			Logger::Error(L"RegisterClassEx failed");
 			return false;
 		}
 
@@ -107,38 +100,37 @@ namespace screenshot_tool {
 			CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
 			nullptr, nullptr, hInst_, this);
 		if (!hwnd_) {
-			HDRSHOT_LOG_ERROR("CreateWindowEx failed");
+			Logger::Error(L"CreateWindowEx failed");
 			return false;
 		}
 
-		// 4) ³õÊ¼»¯ÍÐÅÌÍ¼±ê
-		if (!tray_.Initialize(hwnd_, WM_ST_TRAYICON, L"HDR Screenshot Tool")) {
-			HDRSHOT_LOG_ERROR("Tray icon init failed");
-		}
-		else {
-			tray_.Show();
+		// 4) ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¼ï¿½ï¿½
+		if (!tray_.Create(hwnd_, WM_ST_TRAYICON, nullptr, L"HDR Screenshot Tool")) {
+			Logger::Error(L"Tray icon init failed");
 		}
 
-		// 5) ÈÈ¼ü×¢²á
-		hotkeys_.Attach(hwnd_);
-		if (!hotkeys_.RegisterFromString(HOTKEY_ID_REGION, cfg_.regionHotkey)) {
-			HDRSHOT_LOG_WARN("Register region hotkey failed: {}", cfg_.regionHotkey);
+		// 5) ï¿½È¼ï¿½×¢ï¿½ï¿½
+		if (!hotkeys_.RegisterHotkey(hwnd_, HOTKEY_ID_REGION, cfg_.regionHotkey)) {
+			Logger::Warn(L"Register region hotkey failed: {}", StringUtils::Utf8ToWide(cfg_.regionHotkey));
 		}
-		if (!hotkeys_.RegisterFromString(HOTKEY_ID_FULLSCREEN, cfg_.fullscreenHotkey)) {
-			HDRSHOT_LOG_WARN("Register fullscreen hotkey failed: {}", cfg_.fullscreenHotkey);
-		}
-
-		// 6) Overlay£¨ÇøÓòÑ¡Ôñ£©
-		if (!overlay_.Create(hInst_, hwnd_, WM_ST_REGION_DONE)) {
-			HDRSHOT_LOG_WARN("Overlay create failed (region capture disabled)");
+		if (!hotkeys_.RegisterHotkey(hwnd_, HOTKEY_ID_FULLSCREEN, cfg_.fullscreenHotkey)) {
+			Logger::Warn(L"Register fullscreen hotkey failed: {}", StringUtils::Utf8ToWide(cfg_.fullscreenHotkey));
 		}
 
-		// 7) Capture ¹ÜÏß³õÊ¼»¯£¨µ×²ã DXGI + GDI »ØÍË£©
+		// 6) Overlayï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¡ï¿½ï¿½
+		auto regionCallback = [this](const RECT& rect) {
+			onRegionSelected(rect);
+		};
+		if (!overlay_.Create(hInst_, hwnd_, regionCallback)) {
+			Logger::Warn(L"Overlay create failed (region capture disabled)");
+		}
+
+		// 7) Capture ï¿½ï¿½ï¿½ß³ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½×²ï¿½ DXGI + GDI ï¿½ï¿½ï¿½Ë£ï¿½
 		if (!capture_.Initialize()) {
-			HDRSHOT_LOG_WARN("Capture init failed; will rely on GDI fallback");
+			Logger::Warn(L"Capture init failed; will rely on GDI fallback");
 		}
 
-		// 8) ×Ô¶¯Æô¶¯£¨ÈôÅäÖÃÎª true£©
+		// 8) ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îª trueï¿½ï¿½
 		applyAutoStart();
 
 		running_ = true;
@@ -158,7 +150,8 @@ namespace screenshot_tool {
 		if (!running_) return;
 		running_ = false;
 
-		hotkeys_.Detach();
+		hotkeys_.UnregisterHotkey(hwnd_, HOTKEY_ID_REGION);
+		hotkeys_.UnregisterHotkey(hwnd_, HOTKEY_ID_FULLSCREEN);
 		tray_.Destroy();
 
 		if (hwnd_) {
@@ -167,26 +160,26 @@ namespace screenshot_tool {
 		}
 
 		SaveConfig(cfg_);
-		HDRSHOT_LOG_INFO("App shutdown.");
+		Logger::Info(L"App shutdown.");
 	}
 
 	// ----------------------------------------------------------------------------
-	// ÍÐÅÌ²Ëµ¥µã»÷´¦Àí
+	// ï¿½ï¿½ï¿½Ì²Ëµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::onTrayMenu(UINT cmd) {
 		switch (cmd) {
-		case IDM_TRAY_CAPTURE_REGION:     doCaptureRegion();      break;
-		case IDM_TRAY_CAPTURE_FULLSCREEN: doCaptureFullscreen();  break;
-		case IDM_TRAY_OPEN_FOLDER: {
+		case TrayMenuId::IDM_TRAY_CAPTURE_REGION:     doCaptureRegion();      break;
+		case TrayMenuId::IDM_TRAY_CAPTURE_FULLSCREEN: doCaptureFullscreen();  break;
+		case TrayMenuId::IDM_TRAY_OPEN_FOLDER: {
 			auto dirW = ensureSaveDir(cfg_);
 			ShellExecute(nullptr, L"open", dirW.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			break;
 		}
-		case IDM_TRAY_TOGGLE_AUTOSTART:
+		case TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART:
 			cfg_.autoStart = !cfg_.autoStart;
 			applyAutoStart();
 			break;
-		case IDM_TRAY_EXIT:
+		case TrayMenuId::IDM_TRAY_EXIT:
 			PostMessage(hwnd_, WM_CLOSE, 0, 0);
 			break;
 		default: break;
@@ -194,65 +187,68 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// ÇøÓò½ØÍ¼´¥·¢
+	// ï¿½ï¿½ï¿½ï¿½ï¿½Í¼ï¿½ï¿½ï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::doCaptureRegion() {
 		if (!overlay_.IsValid()) {
-			HDRSHOT_LOG_WARN("Region overlay invalid");
+			Logger::Warn(L"Region overlay invalid");
 			return;
 		}
 		overlay_.BeginSelect();
 	}
 
 	// ----------------------------------------------------------------------------
-	// È«ÆÁ½ØÍ¼´¥·¢
+	// È«ï¿½ï¿½ï¿½ï¿½Í¼ï¿½ï¿½ï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::doCaptureFullscreen() {
-		// TODO: ¸ù¾ÝÅäÖÃ×¥µ±Ç°ÏÔÊ¾Æ÷»òÐéÄâÈ«²¿
+		// TODO: ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×¥ï¿½ï¿½Ç°ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È«ï¿½ï¿½
 		RECT vr = capture_.GetVirtualDesktop();
-		CaptureRect(vr); // ÁÙÊ±µ÷ÓÃÍ¬½Ó¿Ú£»ºóÃæ²ð·Ö
+		CaptureRect(vr); // ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½Í¬ï¿½Ó¿Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	}
 
 	// ----------------------------------------------------------------------------
-	// Overlay Íê³ÉÇøÓòÑ¡Ôñ -> App ÊÕµ½ WM_ST_REGION_DONE
+	// Overlay ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¡ï¿½ï¿½ -> App ï¿½Õµï¿½ WM_ST_REGION_DONE
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::onRegionSelected(const RECT& r) {
 		CaptureRect(r);
 	}
 
 	// ----------------------------------------------------------------------------
-	// Êµ¼ÊÖ´ÐÐ½ØÍ¼£¨ÇøÓò»òÈ«ÆÁ£©
+	// Êµï¿½ï¿½Ö´ï¿½Ð½ï¿½Í¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È«ï¿½ï¿½ï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::CaptureRect(const RECT& r) {
 		std::wstring savePath = ensureSaveDir(cfg_);
 		std::wstring filename = PathUtils::MakeTimestampedPngNameW();
 
-		SmartCapture::Result res = capture_.CaptureToFileAndClipboard(r, filename.c_str());
+		SmartCapture::Result res = capture_.CaptureToFileAndClipboard(hwnd_, r, filename.c_str());
 		switch (res) {
 		case SmartCapture::Result::OK:
 			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"½ØÍ¼ÒÑ±£´æ", filename.c_str());
+				WinNotification::ShowBalloon(hwnd_, L"ï¿½ï¿½Í¼ï¿½Ñ±ï¿½ï¿½ï¿½", filename.c_str());
 			}
 			break;
 		case SmartCapture::Result::FallbackGDI:
 			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"DXGI Ê§°Ü£¬ÒÑÊ¹ÓÃ GDI", filename.c_str());
+				WinNotification::ShowBalloon(hwnd_, L"DXGI Ê§ï¿½Ü£ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½ GDI", filename.c_str());
 			}
 			break;
 		default:
 			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"½ØÍ¼Ê§°Ü", L"Çë²é¿´ÈÕÖ¾");
+				WinNotification::ShowBalloon(hwnd_, L"ï¿½ï¿½Í¼Ê§ï¿½ï¿½", L"ï¿½ï¿½é¿´ï¿½ï¿½Ö¾");
 			}
 			break;
 		}
 	}
 
 	// ----------------------------------------------------------------------------
-	// Ó¦ÓÃ×Ô¶¯Æô¶¯ÉèÖÃ£¨´´½¨/É¾³ý¿ì½Ý·½Ê½£©
+	// Ó¦ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã£ï¿½ï¿½ï¿½ï¿½ï¿½/É¾ï¿½ï¿½ï¿½ï¿½Ý·ï¿½Ê½ï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::applyAutoStart() {
 		if (cfg_.autoStart) {
-			WinShell::CreateStartupShortcut();
+			// èŽ·å–å½“å‰æ‰§è¡Œæ–‡ä»¶è·¯å¾„
+			wchar_t exePath[MAX_PATH] = {};
+			GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+			WinShell::CreateStartupShortcut(exePath);
 		}
 		else {
 			WinShell::RemoveStartupShortcut();
@@ -260,7 +256,7 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// Window Proc ÇÅ½Ó¾²Ì¬ -> ÊµÀý
+	// Window Proc ï¿½Å½Ó¾ï¿½Ì¬ -> Êµï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	LRESULT CALLBACK ScreenshotApp::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		ScreenshotApp* self = nullptr;
@@ -280,7 +276,7 @@ namespace screenshot_tool {
 	}
 
 	// ----------------------------------------------------------------------------
-	// ÊµÀýÏûÏ¢´¦Àí
+	// Êµï¿½ï¿½ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½ï¿½
 	// ----------------------------------------------------------------------------
 	LRESULT ScreenshotApp::instanceProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		switch (msg) {
@@ -302,19 +298,19 @@ namespace screenshot_tool {
 		}
 
 		case WM_ST_TRAYICON: {
-			// lParam Çø·Öµã»÷ÀàÐÍ
+			// lParam ï¿½ï¿½ï¿½Öµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			if (lParam == WM_LBUTTONDBLCLK) {
 				doCaptureRegion();
 			}
 			else if (lParam == WM_RBUTTONUP) {
 				HMENU menu = CreatePopupMenu();
-				AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_REGION, L"ÇøÓò½ØÍ¼");
-				AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_FULLSCREEN, L"È«ÆÁ½ØÍ¼");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_REGION, L"ï¿½ï¿½ï¿½ï¿½ï¿½Í¼");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_CAPTURE_FULLSCREEN, L"È«ï¿½ï¿½ï¿½ï¿½Í¼");
 				AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-				AppendMenu(menu, MF_STRING, IDM_TRAY_OPEN_FOLDER, L"´ò¿ª±£´æÄ¿Â¼");
-				AppendMenu(menu, MF_STRING, IDM_TRAY_TOGGLE_AUTOSTART, cfg_.autoStart ? L"È¡Ïû¿ª»ú×ÔÆô" : L"ÆôÓÃ¿ª»ú×ÔÆô");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_OPEN_FOLDER, L"ï¿½ò¿ª±ï¿½ï¿½ï¿½Ä¿Â¼");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART, cfg_.autoStart ? L"È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½" : L"ï¿½ï¿½ï¿½Ã¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½");
 				AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-				AppendMenu(menu, MF_STRING, IDM_TRAY_EXIT, L"ÍË³ö");
+				AppendMenu(menu, MF_STRING, TrayMenuId::IDM_TRAY_EXIT, L"ï¿½Ë³ï¿½");
 				POINT pt; GetCursorPos(&pt);
 				SetForegroundWindow(hWnd);
 				TrackPopupMenu(menu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, nullptr);
@@ -324,8 +320,8 @@ namespace screenshot_tool {
 		}
 
 		case WM_ST_REGION_DONE: {
-			// Overlay ÔÚ lParam ´«µÝ RECT* »ò encoded rect£»´Ë´¦¼ò»¯£ºRECT Ö±½Ó¸´ÖÆ
-			RECT r = *reinterpret_cast<RECT*>(lParam); // TODO: °´ Overlay ÊµÏÖµ÷Õû
+			// Overlay ï¿½ï¿½ lParam ï¿½ï¿½ï¿½ï¿½ RECT* ï¿½ï¿½ encoded rectï¿½ï¿½ï¿½Ë´ï¿½ï¿½ò»¯£ï¿½RECT Ö±ï¿½Ó¸ï¿½ï¿½ï¿½
+			RECT r = *reinterpret_cast<RECT*>(lParam); // TODO: ï¿½ï¿½ Overlay Êµï¿½Öµï¿½ï¿½ï¿½
 			onRegionSelected(r);
 			return 0;
 		}

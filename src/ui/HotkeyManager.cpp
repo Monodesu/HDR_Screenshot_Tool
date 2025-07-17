@@ -4,7 +4,7 @@
 namespace screenshot_tool {
 
     bool HotkeyManager::RegisterHotkey(HWND hwnd, int id, const std::string& hotkeyText) {
-        UINT mods = 0, vk = 0; if (!ParseHotkey(hotkeyText, mods, vk)) return false;
+        UINT mods = 0, vk = 0; if (!HotkeyParse::ParseHotkey(hotkeyText, mods, vk)) return false;
         return RegisterHotKey(hwnd, id, mods, vk) != FALSE;
     }
 

@@ -11,6 +11,8 @@ namespace screenshot_tool {
         bool Create(HINSTANCE hInst, HWND parent, Callback cb);
         void Show();
         void Hide();
+        bool IsValid() const;
+        void BeginSelect();
 
     private:
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);

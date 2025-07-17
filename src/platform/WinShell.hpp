@@ -4,14 +4,17 @@
 
 namespace screenshot_tool {
 
-	// ·µ»Øµ±Ç°ÓÃ»§µÄ Startup ÎÄ¼þ¼ÐÍêÕûÂ·¾¶£¨%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup£©
-	std::wstring GetStartupFolder();
+	class WinShell {
+	public:
+		// ï¿½ï¿½ï¿½Øµï¿½Ç°ï¿½Ã»ï¿½ï¿½ï¿½ Startup ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startupï¿½ï¿½
+		static std::wstring GetStartupFolder();
 
-	// ÔÚÆô¶¯ÎÄ¼þ¼Ð´´½¨/É¾³ýÖ¸Ïò exePath µÄ¿ì½Ý·½Ê½ (.lnk)
-	bool CreateStartupShortcut(const std::wstring& exePath, const std::wstring& linkName = L"HDR Screenshot Tool.lnk");
-	bool RemoveStartupShortcut(const std::wstring& linkName = L"HDR Screenshot Tool.lnk");
+		// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½Ð´ï¿½ï¿½ï¿½/É¾ï¿½ï¿½Ö¸ï¿½ï¿½ exePath ï¿½Ä¿ï¿½Ý·ï¿½Ê½ (.lnk)
+		static bool CreateStartupShortcut(const std::wstring& exePath, const std::wstring& linkName = L"HDR Screenshot Tool.lnk");
+		static bool RemoveStartupShortcut(const std::wstring& linkName = L"HDR Screenshot Tool.lnk");
 
-	// ²éÑ¯¸Ã¿ì½Ý·½Ê½ÊÇ·ñ´æÔÚ
-	bool IsStartupShortcutPresent(const std::wstring& linkName = L"HDR Screenshot Tool.lnk");
+		// ï¿½ï¿½Ñ¯ï¿½Ã¿ï¿½Ý·ï¿½Ê½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½
+		static bool IsStartupShortcutPresent(const std::wstring& linkName = L"HDR Screenshot Tool.lnk");
+	};
 
 } // namespace screenshot_tool

@@ -1,16 +1,16 @@
 #pragma once
+#define WM_TRAYICON (WM_APP + 100)
+
 #include "../platform/WinHeaders.hpp"
 #include <string>
 
 namespace screenshot_tool {
 
-    // 托盘回调消息 ID（用户自定义基准）
-    constexpr UINT WM_TRAYICON = WM_APP + 100;
-
-    // 菜单项 ID
+    // 锟剿碉拷锟斤拷 ID
     enum TrayMenuId : UINT {
         IDM_TRAY_CAPTURE_REGION = 1000,
         IDM_TRAY_CAPTURE_FULLSCREEN,
+        IDM_TRAY_OPEN_FOLDER,
         IDM_TRAY_TOGGLE_AUTOSTART,
         IDM_TRAY_TOGGLE_SAVEFILE,
         IDM_TRAY_EXIT

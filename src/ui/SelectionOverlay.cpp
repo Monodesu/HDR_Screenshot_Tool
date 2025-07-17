@@ -24,11 +24,19 @@ namespace screenshot_tool {
         if (!hwnd_)return; fadingOut_ = true; fadingIn_ = false; SetTimer(hwnd_, 2, 16, nullptr);
     }
 
+    bool SelectionOverlay::IsValid() const {
+        return hwnd_ != nullptr;
+    }
+
+    void SelectionOverlay::BeginSelect() {
+        Show();
+    }
+
     void SelectionOverlay::startSelect(int x, int y) { selecting_ = true; start_.x = x; start_.y = y; cur_ = start_; InvalidateRect(hwnd_, nullptr, FALSE); }
     
     void SelectionOverlay::updateSelect(int x, int y) { cur_.x = x; cur_.y = y; InvalidateRect(hwnd_, nullptr, FALSE); }
     
-    void SelectionOverlay::finishSelect() { if (!selecting_)return; selecting_ = false; RECT rc{ min(start_.x,cur_.x),min(start_.y,cur_.y),max(start_.x,cur_.x),max(start_.y,cur_.y) }; Hide(); if (cb_)cb_(rc); }
+    void SelectionOverlay::finishSelect() { if (!selecting_)return; selecting_ = false; RECT rc{ std::min(start_.x,cur_.x),std::min(start_.y,cur_.y),std::max(start_.x,cur_.x),std::max(start_.y,cur_.y) }; Hide(); if (cb_)cb_(rc); }
 
     LRESULT CALLBACK SelectionOverlay::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) { SelectionOverlay* self = (SelectionOverlay*)GetWindowLongPtr(h, GWLP_USERDATA); if (m == WM_NCCREATE) { CREATESTRUCT* cs = (CREATESTRUCT*)l; SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams); return DefWindowProc(h, m, w, l); }if (!self)return DefWindowProc(h, m, w, l); return self->instanceProc(h, m, w, l); }
 

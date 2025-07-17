@@ -1,9 +1,9 @@
 #include "StringUtils.hpp"
 #include "../platform/WinHeaders.hpp"
 
-namespace screenshot_tool::StringUtils {
+namespace screenshot_tool {
 
-    std::wstring Utf8ToWide(std::string_view utf8)
+    std::wstring StringUtils::Utf8ToWide(std::string_view utf8)
     {
         if (utf8.empty()) return {};
         int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.data(),
@@ -15,7 +15,7 @@ namespace screenshot_tool::StringUtils {
         return wide;
     }
 
-    std::string WideToUtf8(std::wstring_view wide)
+    std::string StringUtils::WideToUtf8(std::wstring_view wide)
     {
         if (wide.empty()) return {};
         int len = WideCharToMultiByte(CP_UTF8, 0, wide.data(),
@@ -28,4 +28,4 @@ namespace screenshot_tool::StringUtils {
         return utf8;
     }
 
-} // namespace screenshot_tool::StringUtils
+} // namespace screenshot_tool

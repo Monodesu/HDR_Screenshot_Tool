@@ -1,11 +1,12 @@
 #pragma once
+#include "../platform/WinHeaders.hpp"
 #include <cstdint>
 #include <string>
 
 namespace screenshot_tool {
 	class ClipboardWriter {
 	public:
-		// Ð´Èë RGB8 ÏñËØµ½¼ôÌù°å (CF_BITMAP)
+		// Ð´ï¿½ï¿½ RGB8 ï¿½ï¿½ï¿½Øµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (CF_BITMAP)
 		static bool WriteRGB(HWND hwnd, const uint8_t* rgb, int w, int h);
-	}
+	};
 } // namespace screenshot_tool

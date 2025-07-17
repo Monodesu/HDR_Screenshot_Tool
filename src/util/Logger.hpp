@@ -6,20 +6,20 @@
 
 namespace screenshot_tool {
 
-    // ¼òÒ×ÈÕÖ¾£ºµ÷ÊÔÊä³ö + ¿ÉÑ¡Ğ´ÎÄ¼ş£¨ÒÀ config.debugMode£©¡£
+    // è°ƒè¯•æ—¥å¿—ç±»ï¼Œè¾“å‡ºåˆ°è°ƒè¯•å™¨ + å¯é€‰å†™æ–‡ä»¶ï¼ˆæ ¹æ® config.debugModeå¼€å¯ï¼‰
     class Logger {
     public:
         static Logger& Get();
-        static void EnableFileLogging(const std::wstring& path); // ´«¿ÕÔò¹Ø±Õ
+        static void EnableFileLogging(const std::wstring& path); // å¯ç”¨æ–‡ä»¶è¾“å‡º
 
         template<class...Args>
-        static void Info(std::wstring_view fmt, Args&&...args) { logImpl(L"INFO", fmt, std::forward<Args>(args)...); }
+        static void Info(std::wstring_view fmt, Args&&...args) { Get().logImpl(L"INFO", fmt, std::forward<Args>(args)...); }
         template<class...Args>
-        static void Warn(std::wstring_view fmt, Args&&...args) { logImpl(L"WARN", fmt, std::forward<Args>(args)...); }
+        static void Warn(std::wstring_view fmt, Args&&...args) { Get().logImpl(L"WARN", fmt, std::forward<Args>(args)...); }
         template<class...Args>
-        static void Error(std::wstring_view fmt, Args&&...args) { logImpl(L"ERR", fmt, std::forward<Args>(args)...); }
+        static void Error(std::wstring_view fmt, Args&&...args) { Get().logImpl(L"ERR", fmt, std::forward<Args>(args)...); }
         template<class...Args>
-        static void Debug(std::wstring_view fmt, Args&&...args) { logImpl(L"DBG", fmt, std::forward<Args>(args)...); }
+        static void Debug(std::wstring_view fmt, Args&&...args) { Get().logImpl(L"DBG", fmt, std::forward<Args>(args)...); }
 
     private:
         Logger() = default;

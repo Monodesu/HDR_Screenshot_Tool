@@ -3,16 +3,16 @@
 
 namespace screenshot_tool {
 
-    // ---- ³õÊ¼»¯ ---------------------------------------------------------------
+    // ---- ï¿½ï¿½Ê¼ï¿½ï¿½ ---------------------------------------------------------------
     bool SmartCapture::Initialize()
     {
         Logger::Debug(L"SmartCapture::Initialize()");
-        // DXGI ³õÊ¼»¯Ê§°Ü²»ÖÁÓÚÖÂÃü£»ºóÐø²¶»ñÊ±»á×Ô¶¯ fallback
+        // DXGI ï¿½ï¿½Ê¼ï¿½ï¿½Ê§ï¿½Ü²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½Ô¶ï¿½ fallback
         dxgi_.Initialize();
         return true;
     }
 
-    // ---- Ö÷Èë¿Ú£ºCaptureToFileAndClipboard -----------------------------------
+    // ---- ï¿½ï¿½ï¿½ï¿½Ú£ï¿½CaptureToFileAndClipboard -----------------------------------
     SmartCapture::Result SmartCapture::CaptureToFileAndClipboard(HWND hwnd, const RECT& r,
         const wchar_t* savePath)
     {
@@ -27,14 +27,14 @@ namespace screenshot_tool {
             return Result::Failed;
         }
 
-        // Ð´¼ôÌù°å
-        if (!ClipboardWriter::WriteRGB(hwnd, rgb8.data(), w, h)) {
+        // Ð´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        if (!ClipboardWriter::WriteRGB(hwnd, rgb8.data.data(), w, h)) {
             Logger::Warn(L"ClipboardWriter failed");
         }
 
-        // PNG ±£´æ£¨¿ÉÑ¡Â·¾¶Îª¿ÕÔò²»±£´æ£©
+        // PNG ï¿½ï¿½ï¿½æ£¨ï¿½ï¿½Ñ¡Â·ï¿½ï¿½Îªï¿½ï¿½ï¿½ò²»±ï¿½ï¿½æ£©
         if (savePath && *savePath) {
-            if (!ImageSaverPNG::SaveRGBtoPNG(rgb8.data(), w, h, savePath)) {
+            if (!ImageSaverPNG::SaveRGBToPNG(rgb8.data.data(), w, h, savePath)) {
                 Logger::Warn(L"ImageSaverPNG failed");
             }
         }
@@ -42,30 +42,30 @@ namespace screenshot_tool {
         return usedGDI ? Result::FallbackGDI : Result::OK;
     }
 
-    // ---- È«ÆÁ½ØÍ¼ (ÐéÄâ×ÀÃæ»òµ±Ç°¼àÊÓÆ÷) --------------------------------------
+    // ---- È«ï¿½ï¿½ï¿½ï¿½Í¼ (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½) --------------------------------------
     SmartCapture::Result SmartCapture::CaptureFullscreen(HWND hwnd, const RECT& virtualRect,
         const wchar_t* savePath)
     {
-        return CaptureToFileAndClipboard(virtualRect, savePath);
+        return CaptureToFileAndClipboard(hwnd, virtualRect, savePath);
     }
 
-    // ---- ÄÚ²¿£º³¢ÊÔ DXGI ¡ú Ê§°Ü fallback GDI ----------------------------------
+    // ---- ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ DXGI ï¿½ï¿½ Ê§ï¿½ï¿½ fallback GDI ----------------------------------
     bool SmartCapture::captureRegionInternal(int x, int y, int w, int h,
         ImageBuffer& outRGB8,
         bool& usedGDI)
     {
         usedGDI = false;
 
-        // ÏÈ³¢ÊÔ DXGI
+        // ï¿½È³ï¿½ï¿½ï¿½ DXGI
         if (dxgi_.IsInitialized()) {
             DXGI_FORMAT fmt{};
-            if (dxgi_.CaptureRegion(x, y, w, h, fmt, outRGB8)) {
-                PixelConvert::ToSRGB8(fmt, outRGB8); // HDR ¡ú SDR
+            if (dxgi_.CaptureRegion(x, y, w, h, fmt, outRGB8) == CaptureResult::Success) {
+                PixelConvert::ToSRGB8(fmt, outRGB8); // HDR ï¿½ï¿½ SDR
                 return true;
             }
             else {
                 Logger::Warn(L"DXGI Capture failed, fallback to GDI");
-                dxgi_.Reinitialize(); // ³¢ÊÔÖØÁ¬£¬ÏÂÒ»´Î¿ÉÄÜ»Ö¸´
+                dxgi_.Reinitialize(); // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Î¿ï¿½ï¿½Ü»Ö¸ï¿½
             }
         }
 
@@ -76,6 +76,15 @@ namespace screenshot_tool {
         }
 
         return false;
+    }
+
+    RECT SmartCapture::GetVirtualDesktop() const {
+        return RECT{ 
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN)
+        };
     }
 
 } // namespace screenshot_tool

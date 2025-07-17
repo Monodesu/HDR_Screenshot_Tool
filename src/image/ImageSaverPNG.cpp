@@ -3,9 +3,9 @@
 
 namespace screenshot_tool {
 
-    bool SaveRGBToPNG(const std::wstring& path, const uint8_t* rgb, int w, int h) {
-        // TODO:  π”√ GDI+ Bitmap + CLSID_PNG ±£¥Ê
-        (void)path; (void)rgb; (void)w; (void)h;
+    bool ImageSaverPNG::SaveRGBToPNG(const uint8_t* rgb, int w, int h, const wchar_t* savePath) {
+        // TODO: ‰ΩøÁî® GDI+ Bitmap + CLSID_PNG ÁºñÁ†ÅÂô®
+        (void)rgb; (void)w; (void)h; (void)savePath;
         return false;
     }
 

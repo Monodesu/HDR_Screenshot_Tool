@@ -1,9 +1,16 @@
 #pragma once
 #include "ImageBuffer.hpp"
+#include <dxgi.h>
 
 namespace screenshot_tool {
 
-	// ½«ÈÎÒâÖ§³Ö¸ñÊ½×ª»»Îª 8bit RGB£¨Êä³ö data vector£©
-	bool ConvertToRGB8(const ImageBuffer& in, ImageBuffer& outRGB8);
+	class PixelConvert {
+	public:
+		// å°†å„ç§æ”¯æŒæ ¼å¼è½¬æ¢ä¸º 8bit RGBï¼Œè¾“å‡ºåˆ° data vector
+		static bool ConvertToRGB8(const ImageBuffer& in, ImageBuffer& outRGB8);
+		
+		// HDR åˆ° SDR è½¬æ¢
+		static bool ToSRGB8(DXGI_FORMAT fmt, ImageBuffer& buffer);
+	};
 
 } // namespace screenshot_tool

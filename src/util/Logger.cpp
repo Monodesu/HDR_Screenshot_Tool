@@ -9,8 +9,8 @@ namespace screenshot_tool {
     }
 
     void Logger::EnableFileLogging(const std::wstring& path) {
-        std::scoped_lock lk(mtx_);
-        filePath_ = path;
+        std::scoped_lock lk(Get().mtx_);
+        Get().filePath_ = path;
     }
 
     void Logger::writeLine(const std::wstring& line) {
