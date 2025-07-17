@@ -20,9 +20,8 @@ namespace screenshot_tool {
 
     class TrayIcon {
     public:
-        bool Create(HWND hwnd, UINT id = 1, HICON icon = nullptr, const wchar_t* tip = L"HDR Screenshot Tool");
+        bool Create(HWND hwnd, UINT callbackMsg, HICON icon = nullptr, const wchar_t* tip = L"HDR Screenshot Tool");
         void Destroy();
-        void ShowBalloon(const std::wstring& title, const std::wstring& msg, DWORD icon = NIIF_INFO, UINT timeoutMs = 3000);
         HMENU BuildContextMenu(bool autoStart, bool saveToFile);
 
     private:

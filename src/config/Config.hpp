@@ -16,8 +16,7 @@ namespace screenshot_tool {
         // 自动启动
         bool        autoStart = false;                     // 启动快捷方式
 
-        // 通知 & 调试
-        bool        showNotification = true;
+        // 调试
         bool        debugMode = false;                     // 写调试日志
 
         // HDR处理
@@ -37,5 +36,8 @@ namespace screenshot_tool {
 
     // 保存配置到 ini；若失败返回 false。
     bool SaveConfig(const Config& cfg, const std::wstring& path = L"config.ini");
+
+    // 确保配置文件存在并是最新版本（包含所有配置项）
+    bool EnsureConfigFile(const Config& cfg, const std::wstring& path = L"config.ini");
 
 } // namespace screenshot_tool

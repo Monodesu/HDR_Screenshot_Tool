@@ -28,7 +28,6 @@ namespace screenshot_tool {
             else if (key == "SaveToFile") cfg.saveToFile = (val == "true" || val == "1");
             else if (key == "AutoCreateSaveDir") cfg.autoCreateSaveDir = (val == "true" || val == "1");
             else if (key == "AutoStart") cfg.autoStart = (val == "true" || val == "1");
-            else if (key == "ShowNotification") cfg.showNotification = (val == "true" || val == "1");
             else if (key == "DebugMode") cfg.debugMode = (val == "true" || val == "1");
             else if (key == "UseACESFilmToneMapping") cfg.useACESFilmToneMapping = (val == "true" || val == "1");
             else if (key == "SDRBrightness") cfg.sdrBrightness = std::clamp(std::stof(val), 80.0f, 1000.0f);
@@ -49,7 +48,6 @@ namespace screenshot_tool {
         f << "SaveToFile=" << (cfg.saveToFile ? "true" : "false") << '\n';
         f << "AutoCreateSaveDir=" << (cfg.autoCreateSaveDir ? "true" : "false") << '\n';
         f << "AutoStart=" << (cfg.autoStart ? "true" : "false") << '\n';
-        f << "ShowNotification=" << (cfg.showNotification ? "true" : "false") << '\n';
         f << "DebugMode=" << (cfg.debugMode ? "true" : "false") << '\n';
         f << "UseACESFilmToneMapping=" << (cfg.useACESFilmToneMapping ? "true" : "false") << '\n';
         f << "SDRBrightness=" << cfg.sdrBrightness << '\n';
@@ -57,6 +55,27 @@ namespace screenshot_tool {
         f << "RegionFullscreenMonitor=" << (cfg.regionFullscreenMonitor ? "true" : "false") << '\n';
         f << "CaptureRetryCount=" << cfg.captureRetryCount << '\n';
         return true;
+    }
+
+    bool EnsureConfigFile(const Config& cfg, const std::wstring& path) {
+        // 检查文件是否存在
+        std::ifstream testFile(path);
+        bool fileExists = testFile.good();
+        testFile.close();
+        
+        if (!fileExists) {
+            // 文件不存在，创建默认配置文件
+            return SaveConfig(cfg, path);
+        }
+        
+        // 文件存在，检查是否包含所有必要的配置项
+        Config tempCfg;
+        if (LoadConfig(tempCfg, path)) {
+            // 重新保存以确保包含所有最新的配置项和注释
+            return SaveConfig(tempCfg, path);
+        }
+        
+        return false;
     }
 
 } // namespace screenshot_tool

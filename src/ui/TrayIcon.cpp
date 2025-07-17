@@ -2,12 +2,12 @@
 
 namespace screenshot_tool {
 
-    bool TrayIcon::Create(HWND hwnd, UINT id, HICON icon, const wchar_t* tip) {
+    bool TrayIcon::Create(HWND hwnd, UINT callbackMsg, HICON icon, const wchar_t* tip) {
         nid_.cbSize = sizeof(nid_);
         nid_.hWnd = hwnd;
-        nid_.uID = id;
+        nid_.uID = 1; // 固定使用ID 1作为托盘图标ID
         nid_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        nid_.uCallbackMessage = WM_TRAYICON;
+        nid_.uCallbackMessage = callbackMsg; // 使用传入的回调消息ID
         nid_.hIcon = icon ? icon : LoadIcon(nullptr, IDI_APPLICATION);
         wcsncpy_s(nid_.szTip, tip, _TRUNCATE);
         added_ = Shell_NotifyIcon(NIM_ADD, &nid_) != FALSE;
@@ -19,15 +19,6 @@ namespace screenshot_tool {
             Shell_NotifyIcon(NIM_DELETE, &nid_);
             added_ = false;
         }
-    }
-
-    void TrayIcon::ShowBalloon(const std::wstring& title, const std::wstring& msg, DWORD icon, UINT timeoutMs) {
-        if (!added_) return;
-        nid_.uFlags = NIF_INFO;
-        wcsncpy_s(nid_.szInfoTitle, title.c_str(), _TRUNCATE);
-        wcsncpy_s(nid_.szInfo, msg.c_str(), _TRUNCATE);
-        nid_.dwInfoFlags = icon; nid_.uTimeout = timeoutMs;
-        Shell_NotifyIcon(NIM_MODIFY, &nid_);
     }
 
     HMENU TrayIcon::BuildContextMenu(bool autoStart, bool saveToFile) {

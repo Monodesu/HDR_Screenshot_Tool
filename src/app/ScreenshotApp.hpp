@@ -7,7 +7,6 @@
 #include "../ui/SelectionOverlay.hpp"
 #include "../platform/WinGDIPlusInit.hpp"
 #include "../platform/WinShell.hpp"
-#include "../platform/WinNotification.hpp"
 #include "../util/Logger.hpp"
 
 namespace screenshot_tool {
@@ -18,8 +17,8 @@ namespace screenshot_tool {
         ~ScreenshotApp();
 
         bool Initialize(HINSTANCE hInst);
-        int  Run();       // ---- ��Ϣѭ�� -------------------------------------------------------------
-        void Shutdown();  // ---- Ӧ���������� ---------------------------------------------------------
+        int  Run();       // ---- 消息循环 -------------------------------------------------------------
+        void Shutdown();  // ---- 应用清理资源 ---------------------------------------------------------
 
     private:
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);

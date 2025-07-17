@@ -10,7 +10,6 @@
 #include "../ui/HotkeyManager.hpp"
 #include "../ui/SelectionOverlay.hpp"
 #include "../platform/WinShell.hpp"
-#include "../platform/WinNotification.hpp"
 #include "../platform/WinGDIPlusInit.hpp"
 #include "../capture/SmartCapture.hpp"
 
@@ -162,9 +161,21 @@ namespace screenshot_tool {
 	bool ScreenshotApp::Initialize(HINSTANCE hInst) {
 		hInst_ = hInst;
 
-		// 1) 加载配置
-		LoadConfig(cfg_, L"config.ini"); // Config.cpp 提供实现
-		Logger::Info(L"Config loaded.");
+		// 1) 加载配置，确保配置文件存在并包含所有配置项
+		bool configLoaded = LoadConfig(cfg_, L"config.ini");
+		if (!configLoaded) {
+			Logger::Info(L"Config file not found, creating default config...");
+			// 首次运行，保存默认配置
+			if (SaveConfig(cfg_, L"config.ini")) {
+				Logger::Info(L"Default config.ini created successfully.");
+			} else {
+				Logger::Warn(L"Failed to create default config.ini");
+			}
+		} else {
+			Logger::Info(L"Config loaded from config.ini");
+			// 确保配置文件包含所有最新配置项
+			EnsureConfigFile(cfg_, L"config.ini");
+		}
 
 		// 2) 确保截图保存目录存在
 		ensureSaveDir(cfg_);
@@ -201,7 +212,9 @@ namespace screenshot_tool {
 		}
 
 		// 4) 初始化托盘图标
-		if (!tray_.Create(hwnd_, WM_ST_TRAYICON, nullptr, L"HDR Screenshot Tool")) {
+		// 使用默认应用程序图标，因为还没有自定义图标资源
+		HICON defaultIcon = LoadIcon(nullptr, IDI_APPLICATION);
+		if (!tray_.Create(hwnd_, WM_ST_TRAYICON, defaultIcon, L"HDR Screenshot Tool")) {
 			Logger::Error(L"Tray icon init failed");
 		}
 
@@ -279,6 +292,10 @@ namespace screenshot_tool {
 		case TrayMenuId::IDM_TRAY_TOGGLE_AUTOSTART:
 			cfg_.autoStart = !cfg_.autoStart;
 			applyAutoStart();
+			// 立即保存配置变更
+			if (SaveConfig(cfg_, L"config.ini")) {
+				Logger::Info(L"AutoStart setting saved: {}", cfg_.autoStart ? L"enabled" : L"disabled");
+			}
 			break;
 		case TrayMenuId::IDM_TRAY_TOGGLE_FULLSCREEN_CURRENT_MONITOR:
 			cfg_.fullscreenCurrentMonitor = !cfg_.fullscreenCurrentMonitor;
@@ -293,7 +310,8 @@ namespace screenshot_tool {
 		case TrayMenuId::IDM_TRAY_EXIT:
 			PostMessage(hwnd_, WM_CLOSE, 0, 0);
 			break;
-		default: break;
+		default: 
+			break;
 		}
 	}
 
@@ -375,6 +393,8 @@ namespace screenshot_tool {
 	// Overlay 区域选择 -> App 接收 WM_ST_REGION_DONE
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::onRegionSelected(const RECT& r) {
+		Logger::Info(L">>> onRegionSelected called with rect: ({},{}) to ({},{})", 
+		            r.left, r.top, r.right, r.bottom);
 		CaptureRect(r);
 	}
 
@@ -382,6 +402,9 @@ namespace screenshot_tool {
 	// 实现执行截图逻辑，支持全屏
 	// ----------------------------------------------------------------------------
 	void ScreenshotApp::CaptureRect(const RECT& r) {
+		Logger::Info(L">>> CaptureRect called with rect: ({},{}) to ({},{})", 
+		            r.left, r.top, r.right, r.bottom);
+		
 		std::wstring savePath = ensureSaveDir(cfg_);
 		std::wstring filename = PathUtils::MakeTimestampedPngNameW();
 		
@@ -392,25 +415,26 @@ namespace screenshot_tool {
 		}
 		fullPath += filename;
 
+		Logger::Info(L"Saving screenshot to: {}", fullPath);
+
 		// 使用冻结帧数据进行区域提取
 		SmartCapture::Result res = capture_.ExtractRegionFromCache(hwnd_, r, cfg_.saveToFile ? fullPath.c_str() : nullptr);
+		
+		Logger::Info(L"Screenshot capture result: {}", static_cast<int>(res));
+		
 		switch (res) {
 		case SmartCapture::Result::OK:
-			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"截图已保存", filename.c_str());
-			}
+			Logger::Info(L"Screenshot saved successfully: {}", filename);
 			break;
 		case SmartCapture::Result::FallbackGDI:
-			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"DXGI 失败，改用 GDI", filename.c_str());
-			}
+			Logger::Info(L"Screenshot saved using GDI fallback: {}", filename);
 			break;
 		default:
-			if (cfg_.showNotification) {
-				WinNotification::ShowBalloon(hwnd_, L"截图失败", L"请查看日志");
-			}
+			Logger::Error(L"Screenshot failed");
 			break;
 		}
+		
+		Logger::Info(L"<<< CaptureRect finished");
 	}
 
 	// ----------------------------------------------------------------------------
