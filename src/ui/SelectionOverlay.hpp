@@ -27,6 +27,11 @@ namespace screenshot_tool {
         void startFadeOut();
         void updateFade();
         void onFadeComplete();
+        
+        // 双缓冲绘制相关
+        void createBackBuffer(int width, int height);
+        void destroyBackBuffer();
+        void renderToBackBuffer();
 
         HWND hwnd_ = nullptr; HWND parent_ = nullptr; Callback cb_;
         bool selecting_ = false; POINT start_{}; POINT cur_{}; 
@@ -40,6 +45,13 @@ namespace screenshot_tool {
         static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度
         static constexpr BYTE FADE_STEP = 20;      // 每次淡入淡出的步长
         static constexpr UINT FADE_INTERVAL = 16; // 约60FPS的更新间隔
+        
+        // 双缓冲绘制
+        HDC memDC_ = nullptr;
+        HBITMAP memBitmap_ = nullptr;
+        HBITMAP oldBitmap_ = nullptr;
+        int bufferWidth_ = 0;
+        int bufferHeight_ = 0;
         
         bool notifyOnHide_ = false; RECT selectedRect_{};
         RECT monitorConstraint_{}; // 显示器约束区域

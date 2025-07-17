@@ -21,6 +21,9 @@ namespace screenshot_tool {
             timerId_ = 0;
         }
         
+        // 清理双缓冲资源
+        destroyBackBuffer();
+        
         // 销毁窗口
         if (hwnd_) {
             DestroyWindow(hwnd_);
@@ -51,6 +54,9 @@ namespace screenshot_tool {
         }
         
         SetWindowPos(hwnd_, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_SHOWWINDOW);
+        
+        // 清理旧的双缓冲区，将在第一次绘制时重新创建
+        destroyBackBuffer();
         
         // 开始淡入动画
         startFadeIn();
@@ -106,6 +112,9 @@ namespace screenshot_tool {
                     monitorRect.right - monitorRect.left, 
                     monitorRect.bottom - monitorRect.top, 
                     SWP_SHOWWINDOW);
+        
+        // 清理旧的双缓冲区，将在第一次绘制时重新创建
+        destroyBackBuffer();
         
         // 开始淡入动画
         startFadeIn();
@@ -183,6 +192,96 @@ namespace screenshot_tool {
         }
     }
 
+    // ---- 双缓冲绘制实现 ----
+    void SelectionOverlay::createBackBuffer(int width, int height) {
+        // 如果尺寸没有变化，不需要重新创建
+        if (memDC_ && bufferWidth_ == width && bufferHeight_ == height) {
+            return;
+        }
+        
+        // 清理旧的缓冲区
+        destroyBackBuffer();
+        
+        // 创建新的双缓冲区
+        HDC hdc = GetDC(hwnd_);
+        if (hdc) {
+            memDC_ = CreateCompatibleDC(hdc);
+            if (memDC_) {
+                memBitmap_ = CreateCompatibleBitmap(hdc, width, height);
+                if (memBitmap_) {
+                    oldBitmap_ = (HBITMAP)SelectObject(memDC_, memBitmap_);
+                    bufferWidth_ = width;
+                    bufferHeight_ = height;
+                }
+            }
+            ReleaseDC(hwnd_, hdc);
+        }
+    }
+
+    void SelectionOverlay::destroyBackBuffer() {
+        if (memDC_) {
+            if (oldBitmap_) {
+                SelectObject(memDC_, oldBitmap_);
+                oldBitmap_ = nullptr;
+            }
+            DeleteDC(memDC_);
+            memDC_ = nullptr;
+        }
+        
+        if (memBitmap_) {
+            DeleteObject(memBitmap_);
+            memBitmap_ = nullptr;
+        }
+        
+        bufferWidth_ = bufferHeight_ = 0;
+    }
+
+    void SelectionOverlay::renderToBackBuffer() {
+        if (!memDC_) return;
+        
+        RECT clientRect = { 0, 0, bufferWidth_, bufferHeight_ };
+        
+        // 绘制暗化背景
+        HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
+        HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkBrush);
+        FillRect(memDC_, &clientRect, darkBrush);
+        SelectObject(memDC_, oldBrush);
+        DeleteObject(darkBrush);
+        
+        // 只在选择时绘制选择框
+        if (selecting_) {
+            // 绘制选择框
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+            HPEN oldPen = (HPEN)SelectObject(memDC_, pen);
+            SetBkMode(memDC_, TRANSPARENT);
+            
+            MoveToEx(memDC_, start_.x, start_.y, nullptr);
+            LineTo(memDC_, cur_.x, start_.y);
+            LineTo(memDC_, cur_.x, cur_.y);
+            LineTo(memDC_, start_.x, cur_.y);
+            LineTo(memDC_, start_.x, start_.y);
+            
+            SelectObject(memDC_, oldPen);
+            DeleteObject(pen);
+            
+            // 显示尺寸信息
+            SetTextColor(memDC_, RGB(255, 255, 255));
+            SetBkColor(memDC_, RGB(0, 0, 0));
+            SetBkMode(memDC_, OPAQUE);
+            
+            int width = abs(cur_.x - start_.x);
+            int height = abs(cur_.y - start_.y);
+            wchar_t sizeText[32];
+            swprintf_s(sizeText, L"%d×%d", width, height);
+            
+            int textX = std::min(start_.x, cur_.x);
+            int textY = std::min(start_.y, cur_.y) - 25;
+            if (textY < 0) textY = std::min(start_.y, cur_.y) + 5;
+            
+            TextOut(memDC_, textX, textY, sizeText, (int)wcslen(sizeText));
+        }
+    }
+
     void SelectionOverlay::startSelect(int x, int y) { 
         selecting_ = true; 
         start_.x = x; 
@@ -211,9 +310,36 @@ namespace screenshot_tool {
             y = screenY - windowRect.top;
         }
         
-        cur_.x = x; 
-        cur_.y = y; 
-        InvalidateRect(hwnd_, nullptr, FALSE); 
+        // 只有当坐标实际发生变化时才进行重绘
+        if (cur_.x != x || cur_.y != y) {
+            // 计算需要重绘的区域（包括旧的和新的选择框）
+            RECT oldRect = {
+                std::min(start_.x, cur_.x),
+                std::min(start_.y, cur_.y),
+                std::max(start_.x, cur_.x),
+                std::max(start_.y, cur_.y)
+            };
+            
+            cur_.x = x; 
+            cur_.y = y; 
+            
+            RECT newRect = {
+                std::min(start_.x, cur_.x),
+                std::min(start_.y, cur_.y),
+                std::max(start_.x, cur_.x),
+                std::max(start_.y, cur_.y)
+            };
+            
+            // 合并两个区域，只重绘变化的部分
+            RECT updateRect;
+            UnionRect(&updateRect, &oldRect, &newRect);
+            
+            // 扩展一点边界以确保完全覆盖线条和文字
+            InflateRect(&updateRect, 50, 50);
+            
+            // 只重绘变化的区域
+            InvalidateRect(hwnd_, &updateRect, FALSE);
+        }
     }
     
     void SelectionOverlay::finishSelect() { 
@@ -264,44 +390,60 @@ namespace screenshot_tool {
             RECT c; 
             GetClientRect(h, &c); 
             
-            // 始终绘制暗化背景
-            HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
-            HBRUSH oldBrush = (HBRUSH)SelectObject(dc, darkBrush);
-            FillRect(dc, &c, darkBrush);
-            SelectObject(dc, oldBrush);
-            DeleteObject(darkBrush);
+            // 创建或更新双缓冲区
+            int width = c.right - c.left;
+            int height = c.bottom - c.top;
+            createBackBuffer(width, height);
             
-            // 只在选择时绘制选择框
-            if (selecting_) {
-                // 绘制选择框
-                HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-                HPEN oldPen = (HPEN)SelectObject(dc, pen);
-                SetBkMode(dc, TRANSPARENT);
+            if (memDC_) {
+                // 渲染到后台缓冲区
+                renderToBackBuffer();
                 
-                MoveToEx(dc, start_.x, start_.y, nullptr);
-                LineTo(dc, cur_.x, start_.y);
-                LineTo(dc, cur_.x, cur_.y);
-                LineTo(dc, start_.x, cur_.y);
-                LineTo(dc, start_.x, start_.y);
+                // 将后台缓冲区内容复制到前台
+                BitBlt(dc, ps.rcPaint.left, ps.rcPaint.top,
+                      ps.rcPaint.right - ps.rcPaint.left,
+                      ps.rcPaint.bottom - ps.rcPaint.top,
+                      memDC_, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
+            } else {
+                // 双缓冲创建失败，回退到直接绘制
+                HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
+                HBRUSH oldBrush = (HBRUSH)SelectObject(dc, darkBrush);
+                FillRect(dc, &c, darkBrush);
+                SelectObject(dc, oldBrush);
+                DeleteObject(darkBrush);
                 
-                SelectObject(dc, oldPen);
-                DeleteObject(pen);
-                
-                // 显示尺寸信息
-                SetTextColor(dc, RGB(255, 255, 255));
-                SetBkColor(dc, RGB(0, 0, 0));
-                SetBkMode(dc, OPAQUE);
-                
-                int width = abs(cur_.x - start_.x);
-                int height = abs(cur_.y - start_.y);
-                wchar_t sizeText[32];
-                swprintf_s(sizeText, L"%d×%d", width, height);
-                
-                int textX = std::min(start_.x, cur_.x);
-                int textY = std::min(start_.y, cur_.y) - 25;
-                if (textY < 0) textY = std::min(start_.y, cur_.y) + 5;
-                
-                TextOut(dc, textX, textY, sizeText, (int)wcslen(sizeText));
+                // 只在选择时绘制选择框
+                if (selecting_) {
+                    // 绘制选择框
+                    HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+                    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+                    SetBkMode(dc, TRANSPARENT);
+                    
+                    MoveToEx(dc, start_.x, start_.y, nullptr);
+                    LineTo(dc, cur_.x, start_.y);
+                    LineTo(dc, cur_.x, cur_.y);
+                    LineTo(dc, start_.x, cur_.y);
+                    LineTo(dc, start_.x, start_.y);
+                    
+                    SelectObject(dc, oldPen);
+                    DeleteObject(pen);
+                    
+                    // 显示尺寸信息
+                    SetTextColor(dc, RGB(255, 255, 255));
+                    SetBkColor(dc, RGB(0, 0, 0));
+                    SetBkMode(dc, OPAQUE);
+                    
+                    int width = abs(cur_.x - start_.x);
+                    int height = abs(cur_.y - start_.y);
+                    wchar_t sizeText[32];
+                    swprintf_s(sizeText, L"%d×%d", width, height);
+                    
+                    int textX = std::min(start_.x, cur_.x);
+                    int textY = std::min(start_.y, cur_.y) - 25;
+                    if (textY < 0) textY = std::min(start_.y, cur_.y) + 5;
+                    
+                    TextOut(dc, textX, textY, sizeText, (int)wcslen(sizeText));
+                }
             }
             
             EndPaint(h, &ps); 
