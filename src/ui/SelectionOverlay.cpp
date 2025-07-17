@@ -31,39 +31,6 @@ namespace screenshot_tool {
         }
     }
 
-    void SelectionOverlay::Show() {
-        if (!hwnd_) return; 
-        
-        // 清除之前的选择状态
-        selecting_ = false;
-        start_ = {};
-        cur_ = {};
-        selectedRect_ = {};
-        notifyOnHide_ = false;
-        
-        RECT r; 
-        if (useMonitorConstraint_) {
-            // 使用显示器约束
-            r = monitorConstraint_;
-        } else {
-            // 使用整个虚拟桌面，支持跨显示器选择
-            r.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-            r.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            r.right = r.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
-            r.bottom = r.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        }
-        
-        SetWindowPos(hwnd_, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_SHOWWINDOW);
-        
-        // 清理旧的双缓冲区，将在第一次绘制时重新创建
-        destroyBackBuffer();
-        
-        // 开始淡入动画
-        startFadeIn();
-        
-        InvalidateRect(hwnd_, nullptr, TRUE);
-    }
-
     void SelectionOverlay::Hide() {
         if (!hwnd_) return;
         
@@ -86,17 +53,24 @@ namespace screenshot_tool {
     }
 
     void SelectionOverlay::BeginSelect() {
+        // 获取整个虚拟桌面区域
+        RECT virtualDesktop;
+        virtualDesktop.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        virtualDesktop.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        virtualDesktop.right = virtualDesktop.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        virtualDesktop.bottom = virtualDesktop.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        
         useMonitorConstraint_ = false;
-        Show();
+        ShowWithRect(virtualDesktop);
     }
 
     void SelectionOverlay::BeginSelectOnMonitor(const RECT& monitorRect) {
         useMonitorConstraint_ = true;
         monitorConstraint_ = monitorRect;
-        ShowOnMonitor(monitorRect);
+        ShowWithRect(monitorRect);
     }
 
-    void SelectionOverlay::ShowOnMonitor(const RECT& monitorRect) {
+    void SelectionOverlay::ShowWithRect(const RECT& displayRect) {
         if (!hwnd_) return; 
         
         // 清除之前的选择状态
@@ -106,11 +80,11 @@ namespace screenshot_tool {
         selectedRect_ = {};
         notifyOnHide_ = false;
         
-        // 设置窗口大小为指定显示器大小
+        // 设置窗口覆盖指定区域
         SetWindowPos(hwnd_, HWND_TOPMOST, 
-                    monitorRect.left, monitorRect.top, 
-                    monitorRect.right - monitorRect.left, 
-                    monitorRect.bottom - monitorRect.top, 
+                    displayRect.left, displayRect.top, 
+                    displayRect.right - displayRect.left, 
+                    displayRect.bottom - displayRect.top, 
                     SWP_SHOWWINDOW);
         
         // 清理旧的双缓冲区，将在第一次绘制时重新创建
@@ -241,30 +215,49 @@ namespace screenshot_tool {
         
         RECT clientRect = { 0, 0, bufferWidth_, bufferHeight_ };
         
-        // 绘制暗化背景
-        HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
-        HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkBrush);
-        FillRect(memDC_, &clientRect, darkBrush);
-        SelectObject(memDC_, oldBrush);
-        DeleteObject(darkBrush);
+        // 始终使用一致的暗化颜色
+        static const COLORREF DARKEN_COLOR = RGB(50, 50, 50); // 深灰色，但要保持一致
         
-        // 只在选择时绘制选择框
         if (selecting_) {
-            // 绘制选择框
+            // 选择状态：绘制带挖空的暗化效果
+            
+            // 1. 先填充整个区域为暗化颜色
+            HBRUSH darkBrush = CreateSolidBrush(DARKEN_COLOR);
+            HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkBrush);
+            FillRect(memDC_, &clientRect, darkBrush);
+            SelectObject(memDC_, oldBrush);
+            DeleteObject(darkBrush);
+            
+            // 2. 计算选择区域
+            RECT selectionRect = {
+                std::min(start_.x, cur_.x),
+                std::min(start_.y, cur_.y),
+                std::max(start_.x, cur_.x),
+                std::max(start_.y, cur_.y)
+            };
+            
+            // 3. 在选择区域内填充黑色（利用分层窗口的颜色键透明效果）
+            HBRUSH clearBrush = CreateSolidBrush(RGB(0, 0, 0));
+            HBRUSH oldBrush2 = (HBRUSH)SelectObject(memDC_, clearBrush);
+            FillRect(memDC_, &selectionRect, clearBrush);
+            SelectObject(memDC_, oldBrush2);
+            DeleteObject(clearBrush);
+            
+            // 4. 绘制选择框边框
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
             HPEN oldPen = (HPEN)SelectObject(memDC_, pen);
             SetBkMode(memDC_, TRANSPARENT);
             
-            MoveToEx(memDC_, start_.x, start_.y, nullptr);
-            LineTo(memDC_, cur_.x, start_.y);
-            LineTo(memDC_, cur_.x, cur_.y);
-            LineTo(memDC_, start_.x, cur_.y);
-            LineTo(memDC_, start_.x, start_.y);
+            MoveToEx(memDC_, selectionRect.left, selectionRect.top, nullptr);
+            LineTo(memDC_, selectionRect.right, selectionRect.top);
+            LineTo(memDC_, selectionRect.right, selectionRect.bottom);
+            LineTo(memDC_, selectionRect.left, selectionRect.bottom);
+            LineTo(memDC_, selectionRect.left, selectionRect.top);
             
             SelectObject(memDC_, oldPen);
             DeleteObject(pen);
             
-            // 显示尺寸信息
+            // 5. 显示尺寸信息
             SetTextColor(memDC_, RGB(255, 255, 255));
             SetBkColor(memDC_, RGB(0, 0, 0));
             SetBkMode(memDC_, OPAQUE);
@@ -279,7 +272,18 @@ namespace screenshot_tool {
             if (textY < 0) textY = std::min(start_.y, cur_.y) + 5;
             
             TextOut(memDC_, textX, textY, sizeText, (int)wcslen(sizeText));
+        } else {
+            // 非选择状态：仅填充暗化背景（与选择状态保持一致）
+            HBRUSH darkBrush = CreateSolidBrush(DARKEN_COLOR);
+            HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkBrush);
+            FillRect(memDC_, &clientRect, darkBrush);
+            SelectObject(memDC_, oldBrush);
+            DeleteObject(darkBrush);
         }
+    }
+
+    void SelectionOverlay::createMaskForSelection() {
+        // 这个方法可以用于更复杂的遮罩创建，目前在renderToBackBuffer中直接处理
     }
 
     void SelectionOverlay::startSelect(int x, int y) { 
@@ -287,6 +291,17 @@ namespace screenshot_tool {
         start_.x = x; 
         start_.y = y; 
         cur_ = start_; 
+        
+        // 开始选择时，立即停止淡入动画并设置到目标透明度
+        if (fadingIn_) {
+            if (timerId_) {
+                KillTimer(hwnd_, timerId_);
+                timerId_ = 0;
+            }
+            fadingIn_ = false;
+            alpha_ = TARGET_ALPHA;
+            SetLayeredWindowAttributes(hwnd_, 0, alpha_, LWA_ALPHA);
+        }
         
         InvalidateRect(hwnd_, nullptr, FALSE); 
     }
@@ -302,8 +317,10 @@ namespace screenshot_tool {
             int screenY = y + windowRect.top;
             
             // 限制在约束范围内
-            screenX = std::max((int)monitorConstraint_.left, std::min(screenX, (int)monitorConstraint_.right - 1));
-            screenY = std::max((int)monitorConstraint_.top, std::min(screenY, (int)monitorConstraint_.bottom - 1));
+            screenX = std::max(static_cast<int>(monitorConstraint_.left), 
+                              std::min(screenX, static_cast<int>(monitorConstraint_.right) - 1));
+            screenY = std::max(static_cast<int>(monitorConstraint_.top), 
+                              std::min(screenY, static_cast<int>(monitorConstraint_.bottom) - 1));
             
             // 转换回窗口坐标
             x = screenX - windowRect.left;
@@ -372,7 +389,16 @@ namespace screenshot_tool {
         startFadeOut();
     }
 
-    LRESULT CALLBACK SelectionOverlay::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) { SelectionOverlay* self = (SelectionOverlay*)GetWindowLongPtr(h, GWLP_USERDATA); if (m == WM_NCCREATE) { CREATESTRUCT* cs = (CREATESTRUCT*)l; SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams); return DefWindowProc(h, m, w, l); }if (!self)return DefWindowProc(h, m, w, l); return self->instanceProc(h, m, w, l); }
+    LRESULT CALLBACK SelectionOverlay::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) { 
+        SelectionOverlay* self = (SelectionOverlay*)GetWindowLongPtr(h, GWLP_USERDATA); 
+        if (m == WM_NCCREATE) { 
+            CREATESTRUCT* cs = (CREATESTRUCT*)l; 
+            SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams); 
+            return DefWindowProc(h, m, w, l); 
+        }
+        if (!self) return DefWindowProc(h, m, w, l); 
+        return self->instanceProc(h, m, w, l); 
+    }
 
     LRESULT SelectionOverlay::instanceProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         switch (m) {
@@ -449,7 +475,8 @@ namespace screenshot_tool {
             EndPaint(h, &ps); 
         }break;
         default:return DefWindowProc(h, m, w, l);
-        }return 0;
+        }
+        return 0;
     }
 
 } // namespace screenshot_tool

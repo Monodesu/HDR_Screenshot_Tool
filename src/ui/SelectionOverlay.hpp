@@ -10,7 +10,6 @@ namespace screenshot_tool {
 
         bool Create(HINSTANCE hInst, HWND parent, Callback cb);
         ~SelectionOverlay(); // 析构函数清理资源
-        void Show();
         void Hide();
         bool IsValid() const;
         void BeginSelect();
@@ -20,7 +19,7 @@ namespace screenshot_tool {
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
         LRESULT instanceProc(HWND, UINT, WPARAM, LPARAM);
         void startSelect(int x, int y); void updateSelect(int x, int y); void finishSelect();
-        void ShowOnMonitor(const RECT& monitorRect); // 在特定显示器上显示
+        void ShowWithRect(const RECT& displayRect); // 统一的显示方法
         
         // 淡入淡出动画相关
         void startFadeIn();
@@ -53,7 +52,12 @@ namespace screenshot_tool {
         int bufferWidth_ = 0;
         int bufferHeight_ = 0;
         
-        bool notifyOnHide_ = false; RECT selectedRect_{};
+        // 选择区域透明效果
+        void createMaskForSelection();
+        
+        // 其他状态变量
+        bool notifyOnHide_ = false; 
+        RECT selectedRect_{};
         RECT monitorConstraint_{}; // 显示器约束区域
         bool useMonitorConstraint_ = false; // 是否使用显示器约束
     };
