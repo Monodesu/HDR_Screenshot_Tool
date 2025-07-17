@@ -67,7 +67,7 @@ namespace screenshot_tool {
                 PixelConvert::ToSRGB8(fmt, outRGB8, isHDR, cfg_);
                 return true;
             }
-            else if (result == CaptureResult::NeedsReinitialize) {
+            else if (result == CaptureResult::NeedsReinitialization) {
                 Logger::Warn(L"DXGI needs reinitialization, fallback to GDI");
                 dxgi_.Reinitialize(); // 尝试重新初始化，下一次可能恢复
             }

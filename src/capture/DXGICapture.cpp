@@ -253,13 +253,15 @@ namespace screenshot_tool {
         }
 
         if (!gotFrame || !allSuccess) {
-            return CaptureResult::NeedsReinitialize;
+            return CaptureResult::NeedsReinitialization;
         }
         
         if (out.data.empty() || std::all_of(out.data.begin(), out.data.end(), [](uint8_t v) { return v == 0; })) {
             return CaptureResult::TemporaryFailure;
         }
 
+        // 注意：当前实现将原始数据存储在 out.data 中，上层会调用 PixelConvert::ToSRGB8 进行处理
+        // 这与原始实现不同，原始实现在这里直接调用 ProcessAndSave 完成所有处理
         return CaptureResult::Success;
     }
 

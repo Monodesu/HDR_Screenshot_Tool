@@ -226,8 +226,15 @@ namespace screenshot_tool {
 	void ScreenshotApp::CaptureRect(const RECT& r) {
 		std::wstring savePath = ensureSaveDir(cfg_);
 		std::wstring filename = PathUtils::MakeTimestampedPngNameW();
+		
+		// 构建完整的文件路径
+		std::wstring fullPath = savePath;
+		if (!fullPath.empty() && fullPath.back() != L'\\') {
+			fullPath += L'\\';
+		}
+		fullPath += filename;
 
-		SmartCapture::Result res = capture_.CaptureToFileAndClipboard(hwnd_, r, filename.c_str());
+		SmartCapture::Result res = capture_.CaptureToFileAndClipboard(hwnd_, r, cfg_.saveToFile ? fullPath.c_str() : nullptr);
 		switch (res) {
 		case SmartCapture::Result::OK:
 			if (cfg_.showNotification) {

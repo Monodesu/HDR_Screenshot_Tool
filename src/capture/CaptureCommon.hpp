@@ -11,9 +11,9 @@ namespace screenshot_tool {
 
     enum class CaptureResult {
         Success,
-        TemporaryFailure,
-        NeedsReinitialize,
-        NotSupported
+        TemporaryFailure,      // 可重试，不需要重新初始化
+        NeedsReinitialization, // 需要重新初始化 (设备丢失、配置变化等)
+        NotSupported          // 完全不支持，需要fallback
     };
 
 } // namespace screenshot_tool
