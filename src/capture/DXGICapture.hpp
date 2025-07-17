@@ -5,8 +5,23 @@
 #include "../platform/WinHeaders.hpp"
 #include <vector>
 #include <dxgi.h>
+#include <dxgi1_6.h>
+#include <d3d11.h>
+#include <wrl/client.h>
 
 namespace screenshot_tool {
+
+    struct MonitorInfo {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        Microsoft::WRL::ComPtr<IDXGIOutput6> output6;
+        Microsoft::WRL::ComPtr<ID3D11Device> device;
+        Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+        Microsoft::WRL::ComPtr<IDXGIOutputDuplication> dupl;
+        RECT desktopRect{};
+        UINT width = 0;
+        UINT height = 0;
+        DXGI_MODE_ROTATION rotation = DXGI_MODE_ROTATION_IDENTITY;
+    };
 
     class DXGICapture {
     public:
@@ -18,8 +33,9 @@ namespace screenshot_tool {
         bool IsHDREnabled() const { return hdrEnabled_; }
         HDRMetadata GetHDRMetadata() const { return hdrMeta_; }
         RECT GetVirtualRect() const { return virtualRect_; }
+        const std::vector<MonitorInfo>& GetMonitors() const { return monitors_; }
 
-        // ����ץ����ȡԭʼ��ʽ (���������� HDR �ж� & ת��)
+        // 底层抓屏获取原始格式 (上层再根据 HDR 判断 & 转换)
         CaptureResult CaptureRegion(int x, int y, int w, int h, DXGI_FORMAT& fmt, ImageBuffer& out);
 
     private:
@@ -27,14 +43,11 @@ namespace screenshot_tool {
         bool hdrEnabled_ = false;
         HDRMetadata hdrMeta_{};
         RECT virtualRect_{};
-
-        // DXGI ���󼯺� (��ֻץ��һ��ʾ����������չ)
-        Microsoft::WRL::ComPtr<IDXGIOutputDuplication> dupl_;
-        Microsoft::WRL::ComPtr<ID3D11Device>          device_;
-        Microsoft::WRL::ComPtr<ID3D11DeviceContext>   context_;
+        std::vector<MonitorInfo> monitors_;
 
         bool initDxgiObjects();
         void detectHDR();
+        bool InitMonitor(MonitorInfo& info);
     };
 
 } // namespace screenshot_tool

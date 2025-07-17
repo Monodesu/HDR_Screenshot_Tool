@@ -3,8 +3,14 @@
 
 namespace screenshot_tool {
 
-	// ½« Rec.2020 PQ (HDR10) ÏñËØ×ª»»ÎªÏßĞÔ¸¡µã£¨0-1£©¿Õ¼ä¡£
-	// ½ö½Ó¿Ú£»ÊµÏÖºóĞø²¹³ä¡£
+	class ColorSpace {
+	public:
+		// Rec.2020 to sRGB color space conversion
+		static void Rec2020ToSRGB(float& r, float& g, float& b);
+	};
+
+	// ä» Rec.2020 PQ (HDR10) æ ¼å¼è½¬æ¢ä¸ºçº¿æ€§ä¼½é©¬ï¼ˆ0-1ï¼‰ç©ºé—´ã€‚
+	// æ¥å£ï¼šå®ç°åå†è°ƒç”¨ã€‚
 	void PQ2020ToLinearSRGB(const uint16_t* srcRGBA16F, int width, int height, int strideBytes, float maxLumNit, float minLumNit, float* outLinearRGB);
 
 } // namespace screenshot_tool

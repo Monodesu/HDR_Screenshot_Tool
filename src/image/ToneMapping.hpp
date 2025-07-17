@@ -1,8 +1,15 @@
 #pragma once
+#include <cstdint>
+
 namespace screenshot_tool {
 
-	// ¼òÒ× ACES Filmic Tone Mapping / Reinhard Õ¼Î»£»ÊäÈëÏßÐÔ HDR£¬Êä³ö 0-1 SDR
+	// å®žçŽ° ACES Filmic Tone Mapping / Reinhard å ä½ï¼Œå°†è¾“å…¥çš„ HDRæ•°å€¼-> 0-1 SDR
 	void ToneMap_ACES(const float* inRGB, float* outRGB, int pixelCount, float targetNits = 250.0f);
 	void ToneMap_Reinhard(const float* inRGB, float* outRGB, int pixelCount, float targetNits = 250.0f);
+	
+	// Helper functions for HDR processing
+	float LinearToSRGB(float linear);
+	float PQToLinear(float pq);
+	float HalfToFloat(uint16_t h);
 
 } // namespace screenshot_tool

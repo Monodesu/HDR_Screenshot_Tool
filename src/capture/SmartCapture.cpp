@@ -59,13 +59,20 @@ namespace screenshot_tool {
         // 优先尝试 DXGI
         if (dxgi_.IsInitialized()) {
             DXGI_FORMAT fmt{};
-            if (dxgi_.CaptureRegion(x, y, w, h, fmt, outRGB8) == CaptureResult::Success) {
-                PixelConvert::ToSRGB8(fmt, outRGB8); // HDR 转 SDR
+            CaptureResult result = dxgi_.CaptureRegion(x, y, w, h, fmt, outRGB8);
+            
+            if (result == CaptureResult::Success) {
+                // HDR 转 SDR，传递 HDR 状态和配置
+                bool isHDR = dxgi_.IsHDREnabled();
+                PixelConvert::ToSRGB8(fmt, outRGB8, isHDR, cfg_);
                 return true;
+            }
+            else if (result == CaptureResult::NeedsReinitialize) {
+                Logger::Warn(L"DXGI needs reinitialization, fallback to GDI");
+                dxgi_.Reinitialize(); // 尝试重新初始化，下一次可能恢复
             }
             else {
                 Logger::Warn(L"DXGI Capture failed, fallback to GDI");
-                dxgi_.Reinitialize(); // 尝试重新初始化，下一次可能恢复
             }
         }
 

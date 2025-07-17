@@ -74,7 +74,7 @@ namespace screenshot_tool {
 		hInst_ = hInst;
 
 		// 1) 加载配置
-		LoadConfig(cfg_); // Config.cpp 提供实现
+		LoadConfig(cfg_, L"config.ini"); // Config.cpp 提供实现
 		Logger::Info(L"Config loaded.");
 
 		// 2) 确保截图保存目录存在
@@ -166,7 +166,7 @@ namespace screenshot_tool {
 			hwnd_ = nullptr;
 		}
 
-		SaveConfig(cfg_);
+		SaveConfig(cfg_, L"config.ini");
 		Logger::Info(L"App shutdown.");
 	}
 
