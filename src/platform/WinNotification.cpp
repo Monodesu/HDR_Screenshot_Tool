@@ -2,7 +2,7 @@
 
 namespace screenshot_tool {
 
-    void ShowBalloonTip(HWND hwnd, UINT iconId, const std::wstring& title, const std::wstring& msg, DWORD icon, UINT timeoutMs) {
+    void WinNotification::ShowBalloon(HWND hwnd, UINT iconId, const std::wstring& title, const std::wstring& msg, DWORD icon, UINT timeoutMs) {
         NOTIFYICONDATA nid{};
         nid.cbSize = sizeof(nid);
         nid.hWnd = hwnd;
@@ -13,6 +13,15 @@ namespace screenshot_tool {
         nid.dwInfoFlags = icon;
         nid.uTimeout = timeoutMs; // Windows < Vista
         Shell_NotifyIcon(NIM_MODIFY, &nid);
+    }
+
+    void WinNotification::ShowBalloon(HWND hwnd,
+        const std::wstring& title,
+        const std::wstring& msg,
+        DWORD icon, UINT timeoutMs)
+    {
+        constexpr UINT kDefaultTrayId = 1;
+        ShowBalloon(hwnd, kDefaultTrayId, title, msg, icon, timeoutMs);
     }
 
 } // namespace screenshot_tool

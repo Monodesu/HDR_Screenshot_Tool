@@ -104,6 +104,9 @@
     <ClInclude Include="src\app\ScreenshotApp.hpp">
       <Filter>源文件\app</Filter>
     </ClInclude>
+    <ClInclude Include="src\util\StringUtils.hpp">
+      <Filter>源文件\util</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\platform\WinShell.cpp">
@@ -168,6 +171,9 @@
     </ClCompile>
     <ClCompile Include="src\app\WinMain.cpp">
       <Filter>源文件\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\util\StringUtils.cpp">
+      <Filter>源文件\util</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

@@ -10,16 +10,16 @@ namespace screenshot_tool {
     class Logger {
     public:
         static Logger& Get();
-        void EnableFileLogging(const std::wstring& path); // 传空则关闭
+        static void EnableFileLogging(const std::wstring& path); // 传空则关闭
 
         template<class...Args>
-        void Info(std::wstring_view fmt, Args&&...args) { logImpl(L"INFO", fmt, std::forward<Args>(args)...); }
+        static void Info(std::wstring_view fmt, Args&&...args) { logImpl(L"INFO", fmt, std::forward<Args>(args)...); }
         template<class...Args>
-        void Warn(std::wstring_view fmt, Args&&...args) { logImpl(L"WARN", fmt, std::forward<Args>(args)...); }
+        static void Warn(std::wstring_view fmt, Args&&...args) { logImpl(L"WARN", fmt, std::forward<Args>(args)...); }
         template<class...Args>
-        void Error(std::wstring_view fmt, Args&&...args) { logImpl(L"ERR", fmt, std::forward<Args>(args)...); }
+        static void Error(std::wstring_view fmt, Args&&...args) { logImpl(L"ERR", fmt, std::forward<Args>(args)...); }
         template<class...Args>
-        void Debug(std::wstring_view fmt, Args&&...args) { logImpl(L"DBG", fmt, std::forward<Args>(args)...); }
+        static void Debug(std::wstring_view fmt, Args&&...args) { logImpl(L"DBG", fmt, std::forward<Args>(args)...); }
 
     private:
         Logger() = default;

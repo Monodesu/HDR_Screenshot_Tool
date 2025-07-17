@@ -30,6 +30,7 @@ namespace screenshot_tool {
         void doCaptureFullscreen();
         void onRegionSelected(const RECT& r);
         void applyAutoStart();
+        void CaptureRect(const RECT& r);
 
         HINSTANCE      hInst_ = nullptr;
         HWND           hwnd_ = nullptr;

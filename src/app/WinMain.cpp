@@ -20,5 +20,3 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     app.Shutdown();
     return code;
 }
-
-} // namespace screenshot_tool

@@ -1,4 +1,5 @@
-#pragma once
+ï»¿#pragma once
+
 #include "DXGICapture.hpp"
 #include "GDICapture.hpp"
 #include "../config/Config.hpp"
@@ -12,21 +13,29 @@ namespace screenshot_tool {
 
     class SmartCapture {
     public:
-        SmartCapture(Config* cfg) : cfg_(cfg) {}
-        bool Initialize();
+        enum class Result {
+            OK,            // æˆåŠŸï¼Œä½¿ç”¨ DXGI
+            FallbackGDI,   // æˆåŠŸï¼Œä½† DXGI å¤±è´¥åä½¿ç”¨ GDI
+            Failed         // ä¸¤ç§åç«¯éƒ½å¤±è´¥
+        };
 
-        // Ö÷Èë¿Ú£º×¥ÇøÓò£¬Íê³É¸ñÊ½×ª»»¡¢Ğ´¼ôÌù°å¡¢¿ÉÑ¡±£´æÎÄ¼ş
-        bool CaptureRegionAndOutput(HWND hwnd, const RECT& r, std::wstring* outSavedPath = nullptr);
+        explicit SmartCapture(Config* cfg) : cfg_(cfg), dxgi_(cfg), gdi_(cfg) {}
 
-        // È«ÆÁ£¨ĞéÄâ×ÀÃæ / µ±Ç°¼àÊÓÆ÷£¬¸ù¾İ cfg£©
-        bool CaptureFullscreenAndOutput(HWND hwnd, std::wstring* outSavedPath = nullptr);
+        // ---- åˆå§‹åŒ– -------------------------------------------------------------
+        bool Initialize();            // å¿…é¡»åœ¨æ•è·å‰è°ƒç”¨ä¸€æ¬¡ï¼ˆApp å¯åŠ¨æ—¶ï¼‰
+
+        // ---- ä¸»å…¥å£ -------------------------------------------------------------
+        Result CaptureToFileAndClipboard(const RECT& r, const wchar_t* savePath);
+        Result CaptureFullscreen(const RECT& virtualRect, const wchar_t* savePath);
 
     private:
-        bool captureRegionInternal(int x, int y, int w, int h, ImageBuffer& outRGB8);
+        // åŒºåŸŸæŠ“å±åˆ° ImageBuffer (8â€‘bit RGB)
+        bool captureRegionInternal(int x, int y, int w, int h, ImageBuffer& outRGB8,
+            bool& usedGDI);
 
         Config* cfg_ = nullptr;
-        DXGICapture dxgi_;
-        GDICapture  gdi_;
+        DXGICapture  dxgi_;
+        GDICapture   gdi_;
     };
 
 } // namespace screenshot_tool

@@ -1,17 +1,32 @@
-#pragma once
+ï»¿#pragma once
+
 #include <string>
 #include <string_view>
 #include <filesystem>
 
+#include "StringUtils.hpp"  // Utf8ToWide / WideToUtf8
+
 namespace screenshot_tool {
 
-	// ½«ÓÃ»§ÅäÖÃµÄ±£´æÂ·¾¶×ª¾ø¶ÔÂ·¾¶£»ÈôÊÇÏà¶ÔÂ·¾¶£¬ÒÔµ±Ç° exe ËùÔÚÄ¿Â¼Îª»ù×¼¡£
-	std::wstring ResolveSavePath(std::wstring_view configuredPath);
+    class PathUtils {
+    public:
+        // è¿”å›å½“å‰å¯æ‰§è¡Œæ–‡ä»¶æ‰€åœ¨ç›®å½•ï¼ˆå®½å­—ç¬¦ä¸²ï¼‰
+        static std::wstring GetExeDirW();
 
-	// È·±£Ä¿Â¼´æÔÚ£¨´´½¨¶à¼¶Ä¿Â¼£©¡£
-	bool EnsureDirectory(const std::wstring& path);
+        // å°†é…ç½®ä¸­å¯èƒ½æ˜¯ç›¸å¯¹è·¯å¾„çš„ä¿å­˜ç›®å½•è§£æä¸ºç»å¯¹è·¯å¾„ï¼ˆå®½å­—ç¬¦ä¸²ï¼‰
+        static std::wstring ResolveSavePathW(std::wstring_view configuredPath);
 
-	// ¸ù¾İÊ±¼ä´ÁÉú³ÉÎÄ¼şÃû£¨YYYYMMDD_HHMMSS.png£©¡£
-	std::wstring MakeTimestampedPngName();
+        // ç¡®ä¿ç›®å½•å­˜åœ¨ï¼Œè‹¥ä¸å­˜åœ¨é€’å½’åˆ›å»ºï¼›è¿”å›æ˜¯å¦å­˜åœ¨/åˆ›å»ºæˆåŠŸ
+        static bool EnsureDirectory(const std::wstring& path);
+
+        // ç”Ÿæˆ yyyyMMdd_HHmmss.png çš„æ–‡ä»¶åï¼ˆå®½å­—ç¬¦ä¸²ï¼‰
+        static std::wstring MakeTimestampedPngNameW();
+
+        // -------- UTFâ€‘8 ä¾¿åˆ©å°è£… --------
+        static std::string ResolveSavePath(std::string_view configuredUtf8Path) {
+            auto resolvedW = ResolveSavePathW(StringUtils::Utf8ToWide(configuredUtf8Path));
+            return StringUtils::WideToUtf8(resolvedW);
+        }
+    };
 
 } // namespace screenshot_tool

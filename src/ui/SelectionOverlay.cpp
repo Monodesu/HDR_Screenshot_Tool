@@ -2,7 +2,7 @@
 
 namespace screenshot_tool {
 
-    static const wchar_t* kOverlayClass = L"HDRShotOverlayWindow";
+    static const wchar_t* kOverlayClass = L"ScreenShotOverlayWindow";
 
     bool SelectionOverlay::Create(HINSTANCE inst, HWND parent, Callback cb) {
         parent_ = parent; cb_ = std::move(cb);
@@ -25,7 +25,9 @@ namespace screenshot_tool {
     }
 
     void SelectionOverlay::startSelect(int x, int y) { selecting_ = true; start_.x = x; start_.y = y; cur_ = start_; InvalidateRect(hwnd_, nullptr, FALSE); }
+    
     void SelectionOverlay::updateSelect(int x, int y) { cur_.x = x; cur_.y = y; InvalidateRect(hwnd_, nullptr, FALSE); }
+    
     void SelectionOverlay::finishSelect() { if (!selecting_)return; selecting_ = false; RECT rc{ min(start_.x,cur_.x),min(start_.y,cur_.y),max(start_.x,cur_.x),max(start_.y,cur_.y) }; Hide(); if (cb_)cb_(rc); }
 
     LRESULT CALLBACK SelectionOverlay::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) { SelectionOverlay* self = (SelectionOverlay*)GetWindowLongPtr(h, GWLP_USERDATA); if (m == WM_NCCREATE) { CREATESTRUCT* cs = (CREATESTRUCT*)l; SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams); return DefWindowProc(h, m, w, l); }if (!self)return DefWindowProc(h, m, w, l); return self->instanceProc(h, m, w, l); }

@@ -6,31 +6,37 @@
 
 #pragma comment(lib, "shlwapi.lib")
 
+namespace fs = std::filesystem;
 namespace screenshot_tool {
 
-    static std::wstring GetExeDir() {
+    std::wstring PathUtils::GetExeDirW()
+    {
         wchar_t buf[MAX_PATH];
         GetModuleFileNameW(nullptr, buf, MAX_PATH);
-        std::filesystem::path p(buf);
+        fs::path p(buf);
         return p.parent_path().wstring();
     }
 
-    std::wstring ResolveSavePath(std::wstring_view configuredPath) {
-        std::filesystem::path p(configuredPath);
-        if (p.is_relative()) p = GetExeDir() / p;
+    std::wstring PathUtils::ResolveSavePathW(std::wstring_view configuredPath)
+    {
+        fs::path p(configuredPath);
+        if (p.is_relative()) p = fs::path(GetExeDirW()) / p;
         return p.wstring();
     }
 
-    bool EnsureDirectory(const std::wstring& path) {
+    bool PathUtils::EnsureDirectory(const std::wstring& path)
+    {
         std::error_code ec;
-        std::filesystem::create_directories(path, ec);
-        return std::filesystem::exists(path);
+        fs::create_directories(path, ec);
+        return fs::exists(path);
     }
 
-    std::wstring MakeTimestampedPngName() {
-        SYSTEMTIME st = {}; GetLocalTime(&st);
+    std::wstring PathUtils::MakeTimestampedPngNameW()
+    {
+        SYSTEMTIME st{}; GetLocalTime(&st);
         wchar_t name[64];
-        swprintf_s(name, L"%04u%02u%02u_%02u%02u%02u.png", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        swprintf_s(name, L"%04u%02u%02u_%02u%02u%02u.png", st.wYear, st.wMonth, st.wDay,
+            st.wHour, st.wMinute, st.wSecond);
         return name;
     }
 

@@ -1,0 +1,14 @@
+﻿#pragma once
+
+#include <string>
+#include <string_view>
+
+namespace screenshot_tool::StringUtils {
+
+	// UTF‑8 → UTF‑16
+	std::wstring Utf8ToWide(std::string_view utf8);
+
+	// UTF‑16 → UTF‑8
+	std::string WideToUtf8(std::wstring_view wide);
+
+} // namespace screenshot_tool::StringUtils
