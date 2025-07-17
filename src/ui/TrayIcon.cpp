@@ -32,13 +32,13 @@ namespace screenshot_tool {
 
     HMENU TrayIcon::BuildContextMenu(bool autoStart, bool saveToFile) {
         HMENU menu = CreatePopupMenu();
-        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_REGION, L"�����ͼ(&R)");
-        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_FULLSCREEN, L"ȫ����ͼ(&F)");
+        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_REGION, L"区域截图(&R)");
+        AppendMenu(menu, MF_STRING, IDM_TRAY_CAPTURE_FULLSCREEN, L"全屏截图(&F)");
         AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenu(menu, MF_STRING | (autoStart ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_AUTOSTART, L"��������(&S)");
-        AppendMenu(menu, MF_STRING | (saveToFile ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_SAVEFILE, L"���浽�ļ�(&V)");
+        AppendMenu(menu, MF_STRING | (autoStart ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_AUTOSTART, L"开机启动(&S)");
+        AppendMenu(menu, MF_STRING | (saveToFile ? MF_CHECKED : 0), IDM_TRAY_TOGGLE_SAVEFILE, L"保存到文件(&V)");
         AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenu(menu, MF_STRING, IDM_TRAY_EXIT, L"�˳�(&X)");
+        AppendMenu(menu, MF_STRING, IDM_TRAY_EXIT, L"退出(&X)");
         return menu;
     }
 

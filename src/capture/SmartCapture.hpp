@@ -32,7 +32,7 @@ namespace screenshot_tool {
         RECT GetVirtualDesktop() const;
 
     private:
-        // 区域抓屏到 ImageBuffer (8‑bit RGB)
+        // 区域抓屏到 ImageBuffer (8-bit RGB)
         bool captureRegionInternal(int x, int y, int w, int h, ImageBuffer& outRGB8,
             bool& usedGDI);
 

@@ -3,16 +3,16 @@
 
 namespace screenshot_tool {
 
-    // ---- ��ʼ�� ---------------------------------------------------------------
+    // ---- 初始化 ---------------------------------------------------------------
     bool SmartCapture::Initialize()
     {
         Logger::Debug(L"SmartCapture::Initialize()");
-        // DXGI ��ʼ��ʧ�ܲ�������������������ʱ���Զ� fallback
+        // DXGI 初始化失败后自动 fallback
         dxgi_.Initialize();
         return true;
     }
 
-    // ---- ����ڣ�CaptureToFileAndClipboard -----------------------------------
+    // ---- 捕获窗口：CaptureToFileAndClipboard -----------------------------------
     SmartCapture::Result SmartCapture::CaptureToFileAndClipboard(HWND hwnd, const RECT& r,
         const wchar_t* savePath)
     {
@@ -27,12 +27,12 @@ namespace screenshot_tool {
             return Result::Failed;
         }
 
-        // д������
+        // 写入剪贴板
         if (!ClipboardWriter::WriteRGB(hwnd, rgb8.data.data(), w, h)) {
             Logger::Warn(L"ClipboardWriter failed");
         }
 
-        // PNG ���棨��ѡ·��Ϊ���򲻱��棩
+        // PNG 保存（路径为空则不保存）
         if (savePath && *savePath) {
             if (!ImageSaverPNG::SaveRGBToPNG(rgb8.data.data(), w, h, savePath)) {
                 Logger::Warn(L"ImageSaverPNG failed");
@@ -42,30 +42,30 @@ namespace screenshot_tool {
         return usedGDI ? Result::FallbackGDI : Result::OK;
     }
 
-    // ---- ȫ����ͼ (���������ǰ������) --------------------------------------
+    // ---- 全屏截图 (捕获整个虚拟桌面) --------------------------------------
     SmartCapture::Result SmartCapture::CaptureFullscreen(HWND hwnd, const RECT& virtualRect,
         const wchar_t* savePath)
     {
         return CaptureToFileAndClipboard(hwnd, virtualRect, savePath);
     }
 
-    // ---- �ڲ������� DXGI �� ʧ�� fallback GDI ----------------------------------
+    // ---- 内部捕获逻辑：DXGI 或 失败时回退到 GDI ----------------------------------
     bool SmartCapture::captureRegionInternal(int x, int y, int w, int h,
         ImageBuffer& outRGB8,
         bool& usedGDI)
     {
         usedGDI = false;
 
-        // �ȳ��� DXGI
+        // 优先尝试 DXGI
         if (dxgi_.IsInitialized()) {
             DXGI_FORMAT fmt{};
             if (dxgi_.CaptureRegion(x, y, w, h, fmt, outRGB8) == CaptureResult::Success) {
-                PixelConvert::ToSRGB8(fmt, outRGB8); // HDR �� SDR
+                PixelConvert::ToSRGB8(fmt, outRGB8); // HDR 转 SDR
                 return true;
             }
             else {
                 Logger::Warn(L"DXGI Capture failed, fallback to GDI");
-                dxgi_.Reinitialize(); // ������������һ�ο��ָܻ�
+                dxgi_.Reinitialize(); // 尝试重新初始化，下一次可能恢复
             }
         }
 

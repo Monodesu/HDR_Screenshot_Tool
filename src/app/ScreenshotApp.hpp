@@ -18,8 +18,8 @@ namespace screenshot_tool {
         ~ScreenshotApp();
 
         bool Initialize(HINSTANCE hInst);
-        int  Run();       // 消息循环
-        void Shutdown();  // 清理
+        int  Run();       // ---- 消息循环 -------------------------------------------------------------
+        void Shutdown();  // ---- 应用生命周期 ---------------------------------------------------------
 
     private:
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);

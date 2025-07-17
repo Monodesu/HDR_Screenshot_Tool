@@ -7,7 +7,7 @@ using namespace screenshot_tool;
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 #if defined(_DEBUG)
-    // Debug CRT 内存检测（可选）
+    // Debug CRT 内存泄漏检测（可选）
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
 
