@@ -427,6 +427,23 @@ namespace screenshot_tool {
             backgroundCheckTimerId_ = 0;
         }
         
+        // 背景图像设置成功后，立即将overlay设置为完全不透明（alpha=255）
+        // 这样用户就能看到完整的冻结背景图像
+        if (hwnd_) {
+            // 停止淡入动画
+            if (timerId_) {
+                KillTimer(hwnd_, timerId_);
+                timerId_ = 0;
+            }
+            fadingIn_ = fadingOut_ = false;
+            alpha_ = 255;  // 完全不透明
+            
+            // 设置窗口为完全不透明，只保留颜色键透明度
+            SetLayeredWindowAttributes(hwnd_, RGB(255, 0, 255), alpha_, LWA_COLORKEY | LWA_ALPHA);
+            
+            Logger::Debug(L"Background image loaded, overlay set to fully opaque (alpha=255)");
+        }
+        
         // 如果窗口已经显示，立即重绘显示背景图像
         if (hwnd_ && IsWindowVisible(hwnd_)) {
             Logger::Debug(L"Window is visible, updating display immediately with background");
