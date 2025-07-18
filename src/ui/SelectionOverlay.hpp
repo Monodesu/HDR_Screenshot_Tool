@@ -55,9 +55,9 @@ namespace screenshot_tool {
         bool fadingToFullOpaque_ = false;  // 新增：淡入到完全不透明的状态
         UINT_PTR timerId_ = 0;
         static constexpr UINT_PTR FADE_TIMER_ID = 1;
-        static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度
-        static constexpr BYTE FADE_STEP = 40;      // 精准控制：5帧完成(0→40→80→120→160→200)
-        static constexpr UINT FADE_INTERVAL = 16; // 60FPS，确保流畅性
+        static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度，保留一些透明感
+        static constexpr BYTE FADE_STEP = 25;      // 适中的步长：8帧完成(0→25→50→75→100→125→150→175→200)
+        static constexpr UINT FADE_INTERVAL = 20; // 50FPS，平滑但不过于频繁
         
         // 背景检测定时器
         UINT_PTR backgroundCheckTimerId_ = 0;

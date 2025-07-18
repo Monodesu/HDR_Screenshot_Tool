@@ -191,78 +191,89 @@ namespace screenshot_tool {
         fadingOut_ = false;
         fadingToFullOpaque_ = false;
         
-        // 初始化淡入状态
+        // 恢复淡入动画：从透明到目标透明度
         alpha_ = 0;
         fadingIn_ = true;
         
-        // 使用颜色键透明度 - 品红色将被视为透明
-        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
+        // 窗口始终完全不透明，通过内容渲染控制视觉效果
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
         
-        // 启动定时器
+        // 启动动画定时器
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
         if (!timerId_) {
             Logger::Error(L"Failed to create fade timer in startFadeIn");
+            // 如果定时器创建失败，直接显示最终效果
+            alpha_ = TARGET_ALPHA;
+            fadingIn_ = false;
+            InvalidateRect(hwnd_, nullptr, FALSE);
             return;
         }
         
-        Logger::Debug(L"Fade-in animation started with alpha={}, timerId={}", alpha_, timerId_);
+        // 立即触发重绘显示初始状态
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        
+        Logger::Debug(L"Fade-in animation started: alpha={}, timerId={}", alpha_, timerId_);
     }
 
     void SelectionOverlay::startFadeToFullOpaque() {
-        Logger::Debug(L"startFadeToFullOpaque called from alpha={}", alpha_);
+        // 这个方法在简化的动画系统中不再使用
+        Logger::Debug(L"startFadeToFullOpaque called but not used in simplified mode");
         
-        // 如果当前alpha已经是255，不需要动画
-        if (alpha_ >= 255) {
-            Logger::Debug(L"Already at full opacity, no animation needed");
-            return;
-        }
+        // 确保窗口完全不透明
+        alpha_ = TARGET_ALPHA;
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
         
-        // 停止之前的动画
-        if (timerId_) {
-            KillTimer(hwnd_, timerId_);
-            timerId_ = 0;
-        }
-        
-        // 初始化从当前透明度淡入到完全不透明的状态
-        fadingIn_ = false;
-        fadingOut_ = false;
-        fadingToFullOpaque_ = true;
-        
-        // 确保alpha至少达到TARGET_ALPHA
-        if (alpha_ < TARGET_ALPHA) {
-            alpha_ = TARGET_ALPHA;
-        }
-        
-        // 启动定时器，从当前alpha值平滑过渡到255
-        timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
-        
-        Logger::Debug(L"Fade-to-full-opaque animation started from alpha={}", alpha_);
+        // 触发重绘
+        InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
     void SelectionOverlay::startFadeOut() {
+        Logger::Debug(L"startFadeOut called");
+        
         // 停止之前的动画
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
         }
         
-        // 初始化淡出状态
+        // 恢复淡出动画：从当前透明度到完全透明
         fadingIn_ = false;
         fadingOut_ = true;
         fadingToFullOpaque_ = false;
         
-        // 启动定时器
+        // 如果当前alpha为0，直接隐藏
+        if (alpha_ <= 0) {
+            alpha_ = 0;
+            fadingOut_ = false;
+            ShowWindow(hwnd_, SW_HIDE);
+            Logger::Debug(L"Window hidden immediately (alpha was 0)");
+            return;
+        }
+        
+        // 启动淡出动画定时器
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, FADE_INTERVAL, nullptr);
+        if (!timerId_) {
+            Logger::Error(L"Failed to create fade timer in startFadeOut");
+            // 如果定时器创建失败，直接隐藏
+            alpha_ = 0;
+            fadingOut_ = false;
+            ShowWindow(hwnd_, SW_HIDE);
+            return;
+        }
+        
+        Logger::Debug(L"Fade-out animation started from alpha={}", alpha_);
     }
 
     void SelectionOverlay::updateFade() {
         bool shouldContinue = false;
+        bool animationCompleted = false;
         
         if (fadingIn_) {
             alpha_ += FADE_STEP;
             if (alpha_ >= TARGET_ALPHA) {
                 alpha_ = TARGET_ALPHA;
                 fadingIn_ = false;
+                animationCompleted = true;
                 shouldContinue = false;
             } else {
                 shouldContinue = true;
@@ -273,6 +284,7 @@ namespace screenshot_tool {
             if (alpha_ >= 255) {
                 alpha_ = 255;
                 fadingToFullOpaque_ = false;
+                animationCompleted = true;
                 shouldContinue = false;
             } else {
                 shouldContinue = true;
@@ -281,6 +293,7 @@ namespace screenshot_tool {
             if (alpha_ <= FADE_STEP) {
                 alpha_ = 0;
                 fadingOut_ = false;
+                animationCompleted = true;
                 shouldContinue = false;
             } else {
                 alpha_ -= FADE_STEP;
@@ -296,12 +309,23 @@ namespace screenshot_tool {
             return; // 直接返回，不更新窗口
         }
         
-        // 更新窗口透明度 - 继续使用颜色键和alpha组合
-        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
+        // 触发重绘以更新视觉效果
+        InvalidateRect(hwnd_, nullptr, FALSE);
         
-        // 如果动画完成，调用完成回调
-        if (!shouldContinue) {
-            onFadeComplete();
+        // 如果动画完成，停止定时器并执行完成逻辑
+        if (animationCompleted) {
+            if (timerId_) {
+                KillTimer(hwnd_, timerId_);
+                timerId_ = 0;
+            }
+            
+            // 淡出完成时隐藏窗口
+            if (alpha_ == 0) {
+                ShowWindow(hwnd_, SW_HIDE);
+                Logger::Debug(L"Window hidden after fade out complete");
+            }
+            
+            Logger::Debug(L"Animation completed: alpha={}", alpha_);
         }
         
         Logger::Debug(L"updateFade: alpha={}, fadingIn={}, fadingToFullOpaque={}, fadingOut={}", 
@@ -309,32 +333,18 @@ namespace screenshot_tool {
     }
 
     void SelectionOverlay::onFadeComplete() {
-        Logger::Debug(L"onFadeComplete called - fadingIn={}, fadingOut={}, fadingToFullOpaque={}, alpha={}", 
-                     fadingIn_, fadingOut_, fadingToFullOpaque_, alpha_);
-        
-        // 停止定时器 - 这是关键，必须确保定时器被停止
-        if (timerId_) {
-            KillTimer(hwnd_, timerId_);
-            timerId_ = 0;
-            Logger::Debug(L"Animation timer stopped in onFadeComplete");
-        }
+        // 这个方法在简化的动画系统中不再使用
+        Logger::Debug(L"onFadeComplete called but not used in simplified mode");
         
         // 确保所有动画状态都被重置
         fadingIn_ = false;
         fadingOut_ = false;
         fadingToFullOpaque_ = false;
         
-        // 如果淡出完成，隐藏窗口
-        if (alpha_ == 0) {
-            ShowWindow(hwnd_, SW_HIDE);
-            Logger::Debug(L"Window hidden after fade out complete");
-        }
-        
-        // 记录动画完成
-        if (alpha_ == 255) {
-            Logger::Debug(L"Fade-to-full-opaque animation completed, overlay fully opaque");
-        } else if (alpha_ == TARGET_ALPHA) {
-            Logger::Debug(L"Fade-in animation completed, overlay at target alpha");
+        // 停止任何可能的定时器
+        if (timerId_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
         }
     }
 
@@ -387,7 +397,10 @@ namespace screenshot_tool {
         
         RECT clientRect = { 0, 0, bufferWidth_, bufferHeight_ };
         
-        // 如果有背景图像，显示黑色半透明遮罩效果
+        // 根据动画透明度调整渲染效果
+        BYTE renderAlpha = alpha_;  // 用于内容渲染的透明度
+        
+        // 如果有背景图像，显示暗化的背景图像
         if (backgroundBitmap_) {
             // 创建临时DC来处理背景图像
             HDC backgroundDC = CreateCompatibleDC(memDC_);
@@ -409,73 +422,93 @@ namespace screenshot_tool {
                 SelectObject(backgroundDC, oldBackgroundBitmap);
                 DeleteDC(backgroundDC);
                 
-                // 创建黑色半透明遮罩效果 - 使用统一的暗化颜色
-                HBRUSH darkenBrush = CreateSolidBrush(OverlayColors::DARKEN_MASK);
-                HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkenBrush);
-                
-                // 设置混合模式，让背景图像变暗但仍可见
-                int oldBkMode = SetBkMode(memDC_, TRANSPARENT);
-                
-                // 使用透明度较高的深色覆盖层创建半透明效果
-                BLENDFUNCTION blend = {0};
-                blend.BlendOp = AC_SRC_OVER;
-                blend.BlendFlags = 0;
-                blend.SourceConstantAlpha = 120; // 约47%透明度，创建较好的暗化效果
-                blend.AlphaFormat = 0;
-                
-                // 检查是否可以使用AlphaBlend（通过尝试获取函数地址）
-                HMODULE hMsimg32 = GetModuleHandleW(L"msimg32.dll");
-                if (!hMsimg32) {
-                    hMsimg32 = LoadLibraryW(L"msimg32.dll");
-                }
-                
-                if (hMsimg32) {
-                    // 尝试获取AlphaBlend函数
-                    typedef BOOL (WINAPI *AlphaBlendProc)(HDC, int, int, int, int, HDC, int, int, int, int, BLENDFUNCTION);
-                    AlphaBlendProc pAlphaBlend = (AlphaBlendProc)GetProcAddress(hMsimg32, "AlphaBlend");
+                // 根据动画透明度创建渐变的暗化效果
+                if (renderAlpha > 0) {
+                    HBRUSH darkenBrush = CreateSolidBrush(OverlayColors::DARKEN_MASK);
+                    HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkenBrush);
                     
-                    if (pAlphaBlend) {
-                        // 创建临时暗化DC
-                        HDC darkenDC = CreateCompatibleDC(memDC_);
-                        if (darkenDC) {
-                            HBITMAP darkenBitmap = CreateCompatibleBitmap(memDC_, bufferWidth_, bufferHeight_);
-                            if (darkenBitmap) {
-                                HBITMAP oldDarkenBitmap = (HBITMAP)SelectObject(darkenDC, darkenBitmap);
-                                
-                                // 用统一的暗化颜色填充暗化位图
-                                FillRect(darkenDC, &clientRect, darkenBrush);
-                                
-                                // 应用AlphaBlend暗化
-                                pAlphaBlend(memDC_, 0, 0, bufferWidth_, bufferHeight_,
-                                           darkenDC, 0, 0, bufferWidth_, bufferHeight_, blend);
-                                
-                                SelectObject(darkenDC, oldDarkenBitmap);
-                                DeleteObject(darkenBitmap);
-                            }
-                            DeleteDC(darkenDC);
-                        }
-                    } else {
-                        // AlphaBlend不可用，使用简单的暗化方法
-                        PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
-                        FillRect(memDC_, &clientRect, darkenBrush);
-                        PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
+                    // 设置混合模式
+                    int oldBkMode = SetBkMode(memDC_, TRANSPARENT);
+                    
+                    // 根据动画透明度调整暗化强度
+                    BLENDFUNCTION blend = {0};
+                    blend.BlendOp = AC_SRC_OVER;
+                    blend.BlendFlags = 0;
+                    blend.SourceConstantAlpha = (BYTE)((120 * renderAlpha) / TARGET_ALPHA); // 动态调整暗化强度
+                    blend.AlphaFormat = 0;
+                    
+                    // 检查是否可以使用AlphaBlend
+                    HMODULE hMsimg32 = GetModuleHandleW(L"msimg32.dll");
+                    if (!hMsimg32) {
+                        hMsimg32 = LoadLibraryW(L"msimg32.dll");
                     }
-                } else {
-                    // 无法加载msimg32.dll，使用最基本的暗化方法
-                    FillRect(memDC_, &clientRect, darkenBrush);
+                    
+                    if (hMsimg32) {
+                        typedef BOOL (WINAPI *AlphaBlendProc)(HDC, int, int, int, int, HDC, int, int, int, int, BLENDFUNCTION);
+                        AlphaBlendProc pAlphaBlend = (AlphaBlendProc)GetProcAddress(hMsimg32, "AlphaBlend");
+                        
+                        if (pAlphaBlend && blend.SourceConstantAlpha > 0) {
+                            // 创建临时暗化DC
+                            HDC darkenDC = CreateCompatibleDC(memDC_);
+                            if (darkenDC) {
+                                HBITMAP darkenBitmap = CreateCompatibleBitmap(memDC_, bufferWidth_, bufferHeight_);
+                                if (darkenBitmap) {
+                                    HBITMAP oldDarkenBitmap = (HBITMAP)SelectObject(darkenDC, darkenBitmap);
+                                    
+                                    // 用统一的暗化颜色填充暗化位图
+                                    FillRect(darkenDC, &clientRect, darkenBrush);
+                                    
+                                    // 应用AlphaBlend暗化
+                                    pAlphaBlend(memDC_, 0, 0, bufferWidth_, bufferHeight_,
+                                               darkenDC, 0, 0, bufferWidth_, bufferHeight_, blend);
+                                    
+                                    SelectObject(darkenDC, oldDarkenBitmap);
+                                    DeleteObject(darkenBitmap);
+                                }
+                                DeleteDC(darkenDC);
+                            }
+                        } else if (renderAlpha > (TARGET_ALPHA / 2)) {
+                            // AlphaBlend不可用或透明度过低，在透明度足够时使用简单暗化
+                            PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
+                            FillRect(memDC_, &clientRect, darkenBrush);
+                            PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
+                        }
+                    } else if (renderAlpha > (TARGET_ALPHA / 2)) {
+                        // 无法加载msimg32.dll，在透明度足够时使用基本暗化
+                        FillRect(memDC_, &clientRect, darkenBrush);
+                    }
+                    
+                    SetBkMode(memDC_, oldBkMode);
+                    SelectObject(memDC_, oldBrush);
+                    DeleteObject(darkenBrush);
                 }
-                
-                SetBkMode(memDC_, oldBkMode);
-                SelectObject(memDC_, oldBrush);
-                DeleteObject(darkenBrush);
             }
         } else {
-            // 没有背景图像时，使用基础暗化颜色
-            HBRUSH darkBrush = CreateSolidBrush(OverlayColors::DARKEN_BASE);
-            HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkBrush);
-            FillRect(memDC_, &clientRect, darkBrush);
-            SelectObject(memDC_, oldBrush);
-            DeleteObject(darkBrush);
+            // 没有背景图像时，根据动画透明度调整显示
+            if (renderAlpha > 0) {
+                if (renderAlpha > (TARGET_ALPHA / 3)) {
+                    // 透明度足够时显示暗化层
+                    HBRUSH darkBrush = CreateSolidBrush(OverlayColors::DARKEN_BASE);
+                    HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkBrush);
+                    FillRect(memDC_, &clientRect, darkBrush);
+                    SelectObject(memDC_, oldBrush);
+                    DeleteObject(darkBrush);
+                } else {
+                    // 透明度较低时，使用透明键颜色（渐变效果）
+                    HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
+                    HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, clearBrush);
+                    FillRect(memDC_, &clientRect, clearBrush);
+                    SelectObject(memDC_, oldBrush);
+                    DeleteObject(clearBrush);
+                }
+            } else {
+                // alpha为0时，完全透明
+                HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
+                HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, clearBrush);
+                FillRect(memDC_, &clientRect, clearBrush);
+                SelectObject(memDC_, oldBrush);
+                DeleteObject(clearBrush);
+            }
         }
         
         // 如果正在选择，在选择区域恢复原始背景（清除暗化效果）
@@ -563,15 +596,16 @@ namespace screenshot_tool {
             backgroundCheckTimerId_ = 0;
         }
         
-        // 背景图像设置成功后，让动画自然继续，不要中断
+        // 背景图像设置成功，但不要干扰正在进行的动画
         if (hwnd_) {
-            // 不要停止正在进行的淡入动画，让它自然完成
-            // 如果没有动画在进行，则设置为目标透明度
+            // 如果没有动画在进行，确保显示效果正确
             if (!fadingIn_ && !fadingOut_ && !fadingToFullOpaque_) {
-                alpha_ = TARGET_ALPHA;
-                SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
+                if (alpha_ < TARGET_ALPHA) {
+                    alpha_ = TARGET_ALPHA;
+                }
+                SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
             }
-            // 如果正在淡入，让动画继续，背景图像会在下次重绘时自动显示
+            // 如果有动画在进行，让动画自然完成，背景图像会在下次重绘时自动显示
             
             Logger::Debug(L"Background image loaded, current alpha={}, fadingIn={}", alpha_, fadingIn_);
         }
