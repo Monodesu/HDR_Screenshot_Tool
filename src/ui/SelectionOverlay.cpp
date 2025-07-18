@@ -50,6 +50,9 @@ namespace screenshot_tool {
                                0, 0, 0, 0, parent, nullptr, inst, this);
         
         if (hwnd_) {
+            // 设置初始透明状态，避免闪烁
+            SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 0, LWA_COLORKEY | LWA_ALPHA);
+            
             // D3D/D2D渲染系统是必需的 - 不再有回退选项
             if (!initializeD3DRenderer()) {
                 Logger::Error(L"Failed to initialize D3D renderer - this is required!");
@@ -57,6 +60,13 @@ namespace screenshot_tool {
             }
             
             initializeSimpleAnimation();
+            
+            // *** 修复：尝试加载背景图像，避免首次黑屏 ***
+            if (backgroundCheckCallback_) {
+                backgroundCheckCallback_();
+            }
+            
+            // 延迟显示窗口，确保初始化完成后再显示
             ShowWindow(hwnd_, SW_HIDE);
         }
         
@@ -324,6 +334,9 @@ namespace screenshot_tool {
         } else {
             startFadeOut();
         }
+
+        // *** 清理背景图像缓存 ***
+        destroyBackgroundBitmap();
     }
 
     void SelectionOverlay::ShowWithRect(const RECT& displayRect) {
@@ -335,6 +348,13 @@ namespace screenshot_tool {
         cur_.x = cur_.y = 0;
         memset(&selectedRect_, 0, sizeof(selectedRect_));
         notifyOnHide_ = false;
+        
+        // *** 先清理旧的背景图像，然后等待新的冻结画面加载完成 ***
+        destroyBackgroundBitmap(); // 确保清理掉上次的残留画面
+        
+        if (backgroundCheckCallback_) {
+            backgroundCheckCallback_(); // 加载新的背景图像
+        }
         
         // 重置动画状态
         if (timerId_) {
@@ -367,6 +387,12 @@ namespace screenshot_tool {
         
         // 设置窗口完全透明，等待背景图像加载
         SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 0, LWA_COLORKEY | LWA_ALPHA);
+        
+        // *** 确保冻结画面加载完成后再显示窗口和暗化效果 ***
+        if (backgroundBitmap_) {
+            SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY | LWA_ALPHA);
+            ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        }
         
         SetFocus(hwnd_);
     }
@@ -410,10 +436,13 @@ namespace screenshot_tool {
 
     void SelectionOverlay::updateFade() {
         if (fadingIn_) {
-            alpha_ = static_cast<BYTE>(std::min<int>(alpha_ + 16, TARGET_ALPHA));
+            // 根据是否有背景图像决定目标透明度
+            BYTE targetAlpha = backgroundBitmap_ ? 255 : TARGET_ALPHA;
+            
+            alpha_ = static_cast<BYTE>(std::min<int>(alpha_ + 16, targetAlpha));
             SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
             
-            if (alpha_ >= TARGET_ALPHA) {
+            if (alpha_ >= targetAlpha) {
                 fadingIn_ = false;
                 KillTimer(hwnd_, timerId_);
                 timerId_ = 0;
@@ -486,7 +515,7 @@ namespace screenshot_tool {
     void SelectionOverlay::renderBackgroundWithD3D() {
         if (!d2dRenderTarget_ || !backgroundBitmap_) return;
 
-        // 创建D2D位图从GDI位图
+        // 创建D2D位图从GDI 位图
         ComPtr<ID2D1Bitmap> d2dBitmap;
         createD2DBitmapFromGDI(backgroundBitmap_, &d2dBitmap);
         
@@ -507,7 +536,7 @@ namespace screenshot_tool {
     }
 
     void SelectionOverlay::renderDarkenMaskWithD3D() {
-        if (!d2dRenderTarget_) return;
+        if (!d2dRenderTarget_ || !backgroundBitmap_) return; // 仅在背景图片加载完成后显示暗化效果
 
         RECT clientRect;
         GetClientRect(hwnd_, &clientRect);
@@ -780,7 +809,13 @@ namespace screenshot_tool {
         useMonitorConstraint_ = false;
         ShowWithRect(virtualDesktop);
         
-        SetBackgroundImage(nullptr, 0, 0, 0);
+        // 不在这里启动淡入动画 - 等待SetBackgroundImage中处理
+        // 只有在背景图像已经存在的情况下才启动动画
+        if (backgroundBitmap_) {
+            auto style = GetWindowLong(hwnd_, GWL_EXSTYLE);
+            SetWindowLong(hwnd_, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+            startFadeIn();
+        }
     }
 
     void SelectionOverlay::BeginSelectOnMonitor(const RECT& monitorRect) {
@@ -788,7 +823,13 @@ namespace screenshot_tool {
         monitorConstraint_ = monitorRect;
         ShowWithRect(monitorRect);
         
-        SetBackgroundImage(nullptr, 0, 0, 0);
+        // 不在这里启动淡入动画 - 等待SetBackgroundImage中处理
+        // 只有在背景图像已经存在的情况下才启动动画
+        if (backgroundBitmap_) {
+            auto style = GetWindowLong(hwnd_, GWL_EXSTYLE);
+            SetWindowLong(hwnd_, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+            startFadeIn();
+        }
     }
 
     void SelectionOverlay::StartWaitingForBackground(std::function<void()> backgroundCheckCallback) {
@@ -930,12 +971,17 @@ namespace screenshot_tool {
             
             if (imageData && width > 0 && height > 0) {
                 createBackgroundBitmap(imageData, width, height, stride);
+                
+                // 背景图像加载完成后，如果当前alpha为0且没有在进行动画，启动淡入
+                if (!fadingIn_ && !fadingOut_ && alpha_ == 0 && !IsWindowVisible(hwnd_)) {
+                    auto style = GetWindowLong(hwnd_, GWL_EXSTYLE);
+                    SetWindowLong(hwnd_, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+                    startFadeIn();
+                }
+                
+                // 强制重绘一次，确保背景图像显示
+                InvalidateRect(hwnd_, nullptr, FALSE);
             }
-            
-            auto style = GetWindowLong(hwnd_, GWL_EXSTYLE);
-            SetWindowLong(hwnd_, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
-            
-            startFadeIn();
         }
     }
 
