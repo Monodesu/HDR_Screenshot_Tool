@@ -69,6 +69,10 @@
     <ClCompile Include="src\util\StringUtils.cpp" />
     <ClCompile Include="src\util\TimeUtils.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="PERFORMANCE_OPTIMIZATION_SUMMARY.md" />
+    <None Include="TIMER_OPTIMIZATION_REPORT.md" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>

@@ -174,4 +174,8 @@
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="TIMER_OPTIMIZATION_REPORT.md" />
+    <None Include="PERFORMANCE_OPTIMIZATION_SUMMARY.md" />
+  </ItemGroup>
 </Project>

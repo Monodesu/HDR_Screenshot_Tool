@@ -1,28 +1,32 @@
 ﻿#include "SelectionOverlay.hpp"
-#include <algorithm> // 添加算法头文件
-#include <vector>    // 添加vector头文件
-#include <cmath>     // 添加数学函数头文件
-#include "../util/Logger.hpp" // 添加Logger头文件
+#include <algorithm>
+#include <vector>
+#include <cmath>
+#include "../util/Logger.hpp"
+
+// D3D11 和 D2D/DirectWrite 头文件
+#include <d3d11_1.h>
+#include <d2d1_1.h>
+#include <dwrite_1.h>
+#include <wrl/client.h>
+
+// 链接必要的库
+#pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "dwrite.lib")
+#include <mmsystem.h>
+
+using Microsoft::WRL::ComPtr;
 
 namespace screenshot_tool {
 
     static const wchar_t* kOverlayClass = L"ScreenShotOverlayWindow";
     
-    // 颜色常量定义 - 统一管理所有暗化相关的颜色
+    // 颜色常量定义
     namespace OverlayColors {
-        // 透明键颜色 - 用于分层窗口透明区域
         static constexpr COLORREF TRANSPARENT_KEY = RGB(255, 0, 255);
-        
-        // 暗化遮罩颜色 - 用于AlphaBlend半透明遮罩效果  
-        static constexpr COLORREF DARKEN_MASK = RGB(60, 60, 60);
-        
-        // 基础暗化颜色 - 用于没有背景图像时的暗化层
-        static constexpr COLORREF DARKEN_BASE = RGB(40, 40, 40);
-        
-        // 回退暗化颜色 - 用于双缓冲失败时的直接绘制
-        static constexpr COLORREF DARKEN_FALLBACK = RGB(80, 80, 80);
-        
-        // UI元素颜色
+        static constexpr COLORREF DARKEN_BASE = RGB(0, 0, 0);
         static constexpr COLORREF TEXT_BACKGROUND = RGB(40, 40, 40);
         static constexpr COLORREF SELECTION_BORDER = RGB(255, 255, 255);
         static constexpr COLORREF TEXT_COLOR = RGB(255, 255, 255);
@@ -37,7 +41,7 @@ namespace screenshot_tool {
         wc.hInstance = inst;
         wc.lpszClassName = kOverlayClass;
         wc.hCursor = LoadCursor(nullptr, IDC_CROSS);
-        wc.hbrBackground = (HBRUSH)GetStockObject(HOLLOW_BRUSH);
+        wc.hbrBackground = (HBRUSH)GetStockObject(NULL_BRUSH);
         RegisterClass(&wc);
         
         // 使用分层窗口，创建时不显示
@@ -46,10 +50,13 @@ namespace screenshot_tool {
                                0, 0, 0, 0, parent, nullptr, inst, this);
         
         if (hwnd_) {
-            // 初始化动画系统
-            initializeAnimationSystem();
+            // D3D/D2D渲染系统是必需的 - 不再有回退选项
+            if (!initializeD3DRenderer()) {
+                Logger::Error(L"Failed to initialize D3D renderer - this is required!");
+                return false; // 直接返回失败，不再回退
+            }
             
-            // 确保窗口创建时就是隐藏状态
+            initializeSimpleAnimation();
             ShowWindow(hwnd_, SW_HIDE);
         }
         
@@ -63,20 +70,16 @@ namespace screenshot_tool {
             timerId_ = 0;
         }
         
-        // 清理背景检测定时器
         if (backgroundCheckTimerId_ && hwnd_) {
             KillTimer(hwnd_, backgroundCheckTimerId_);
             backgroundCheckTimerId_ = 0;
         }
         
-        // 清理双缓冲资源
-        destroyBackBuffer();
+        // 清理D3D渲染资源
+        cleanupD3DRenderer();
         
         // 清理背景图像资源
         destroyBackgroundBitmap();
-        
-        // 清理字体资源
-        destroyFont();
         
         // 销毁窗口
         if (hwnd_) {
@@ -85,49 +88,242 @@ namespace screenshot_tool {
         }
     }
 
+    bool SelectionOverlay::initializeD3DRenderer() {
+        // 获取窗口尺寸
+        RECT clientRect;
+        GetClientRect(hwnd_, &clientRect);
+        UINT width = clientRect.right - clientRect.left;
+        UINT height = clientRect.bottom - clientRect.top;
+        
+        if (width == 0 || height == 0) {
+            width = 1920; // 默认尺寸
+            height = 1080;
+        }
+
+        // 创建D3D11设备和交换链
+        DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
+        swapChainDesc.BufferCount = 2;
+        swapChainDesc.BufferDesc.Width = width;
+        swapChainDesc.BufferDesc.Height = height;
+        swapChainDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        swapChainDesc.BufferDesc.RefreshRate.Numerator = 60;
+        swapChainDesc.BufferDesc.RefreshRate.Denominator = 1;
+        swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swapChainDesc.OutputWindow = hwnd_;
+        swapChainDesc.SampleDesc.Count = 1;
+        swapChainDesc.SampleDesc.Quality = 0;
+        swapChainDesc.Windowed = TRUE;
+        swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+
+        D3D_FEATURE_LEVEL featureLevels[] = {
+            D3D_FEATURE_LEVEL_11_1,
+            D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1,
+            D3D_FEATURE_LEVEL_10_0,
+        };
+
+        HRESULT hr = D3D11CreateDeviceAndSwapChain(
+            nullptr,
+            D3D_DRIVER_TYPE_HARDWARE,
+            nullptr,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            featureLevels,
+            ARRAYSIZE(featureLevels),
+            D3D11_SDK_VERSION,
+            &swapChainDesc,
+            &dxgiSwapChain_,
+            &d3dDevice_,
+            &d3dFeatureLevel_,
+            &d3dContext_
+        );
+
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create D3D11 device and swap chain: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        // 创建渲染目标视图
+        ComPtr<ID3D11Texture2D> backBuffer;
+        hr = dxgiSwapChain_->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to get back buffer: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        hr = d3dDevice_->CreateRenderTargetView(backBuffer.Get(), nullptr, &d3dRenderTargetView_);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create render target view: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        // 创建D2D工厂
+        hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf());
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create D2D factory: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        // 创建DirectWrite工厂
+        hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), &dwriteFactory_);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create DirectWrite factory: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        // 创建D2D渲染目标
+        ComPtr<IDXGISurface> dxgiSurface;
+        hr = dxgiSwapChain_->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to get DXGI surface: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_HARDWARE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f, 96.0f
+        );
+
+        hr = d2dFactory_->CreateDxgiSurfaceRenderTarget(dxgiSurface.Get(), &rtProps, &d2dRenderTarget_);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create D2D render target: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        // 创建画刷
+        hr = d2dRenderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(D2D1::ColorF::White), &d2dWhiteBrush_);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create white brush: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        hr = d2dRenderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0.16f, 0.16f, 0.16f, 0.8f), &d2dDarkBrush_);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create dark brush: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        // 创建文字格式
+        hr = dwriteFactory_->CreateTextFormat(
+            L"Segoe UI",
+            nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            16.0f,
+            L"en-us",
+            &dwriteTextFormat_
+        );
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create text format: {:#x}", static_cast<uint32_t>(hr));
+            return false;
+        }
+
+        dwriteTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        dwriteTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+        Logger::Info(L"D3D/D2D renderer initialized successfully");
+        return true;
+    }
+
+    void SelectionOverlay::cleanupD3DRenderer() {
+        dwriteTextFormat_.Reset();
+        d2dDarkBrush_.Reset();
+        d2dWhiteBrush_.Reset();
+        d2dRenderTarget_.Reset();
+        dwriteFactory_.Reset();
+        d2dFactory_.Reset();
+        d3dRenderTargetView_.Reset();
+        d3dContext_.Reset();
+        d3dDevice_.Reset();
+        dxgiSwapChain_.Reset();
+    }
+
+    void SelectionOverlay::resizeD3DRenderer(UINT width, UINT height) {
+        if (!dxgiSwapChain_) return;
+
+        // 清理旧的渲染目标
+        d2dRenderTarget_.Reset();
+        d3dRenderTargetView_.Reset();
+        d3dContext_->Flush();
+
+        // 调整交换链大小
+        HRESULT hr = dxgiSwapChain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to resize swap chain buffers: {:#x}", static_cast<uint32_t>(hr));
+            return;
+        }
+
+        // 重新创建渲染目标视图
+        ComPtr<ID3D11Texture2D> backBuffer;
+        hr = dxgiSwapChain_->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to get back buffer after resize: {:#x}", static_cast<uint32_t>(hr));
+            return;
+        }
+
+        hr = d3dDevice_->CreateRenderTargetView(backBuffer.Get(), nullptr, &d3dRenderTargetView_);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create render target view after resize: {:#x}", static_cast<uint32_t>(hr));
+            return;
+        }
+
+        // 重新创建D2D渲染目标
+        ComPtr<IDXGISurface> dxgiSurface;
+        hr = dxgiSwapChain_->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to get DXGI surface after resize: {:#x}", static_cast<uint32_t>(hr));
+            return;
+        }
+
+        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_HARDWARE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f, 96.0f
+        );
+
+        hr = d2dFactory_->CreateDxgiSurfaceRenderTarget(dxgiSurface.Get(), &rtProps, &d2dRenderTarget_);
+        if (FAILED(hr)) {
+            Logger::Error(L"Failed to create D2D render target after resize: {:#x}", static_cast<uint32_t>(hr));
+            return;
+        }
+
+        // 重新创建画刷
+        d2dRenderTarget_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &d2dWhiteBrush_);
+        d2dRenderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.16f, 0.16f, 0.16f, 0.8f), &d2dDarkBrush_);
+    }
+
+    void SelectionOverlay::initializeSimpleAnimation() {
+        fadeInterval_ = 15;
+        alpha_ = 0;
+        fadingIn_ = false;
+        fadingOut_ = false;
+        lastUpdateTime_ = GetTickCount();
+        
+        Logger::Debug(L"Animation system initialized with 15ms interval");
+    }
+
     void SelectionOverlay::Hide() {
         if (!hwnd_) return;
         
-        // 停止背景检测定时器
         if (backgroundCheckTimerId_) {
             KillTimer(hwnd_, backgroundCheckTimerId_);
             backgroundCheckTimerId_ = 0;
         }
         
-        // 如果正在选择，直接隐藏；否则开始淡出动画
         if (selecting_) {
-            // 停止任何进行中的动画
             if (timerId_) {
                 KillTimer(hwnd_, timerId_);
                 timerId_ = 0;
             }
-            fadingIn_ = fadingOut_ = fadingToFullOpaque_ = false;  // 重置所有动画状态
+            fadingIn_ = false;
+            fadingOut_ = false;
             ShowWindow(hwnd_, SW_HIDE);
         } else {
             startFadeOut();
         }
-    }
-
-    bool SelectionOverlay::IsValid() const {
-        return hwnd_ != nullptr;
-    }
-
-    void SelectionOverlay::BeginSelect() {
-        // 获取整个虚拟桌面区域
-        RECT virtualDesktop;
-        virtualDesktop.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        virtualDesktop.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        virtualDesktop.right = virtualDesktop.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
-        virtualDesktop.bottom = virtualDesktop.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        
-        useMonitorConstraint_ = false;
-        ShowWithRect(virtualDesktop);
-    }
-
-    void SelectionOverlay::BeginSelectOnMonitor(const RECT& monitorRect) {
-        useMonitorConstraint_ = true;
-        monitorConstraint_ = monitorRect;
-        ShowWithRect(monitorRect);
     }
 
     void SelectionOverlay::ShowWithRect(const RECT& displayRect) {
@@ -140,7 +336,7 @@ namespace screenshot_tool {
         memset(&selectedRect_, 0, sizeof(selectedRect_));
         notifyOnHide_ = false;
         
-        // 重置所有动画状态 - 这对于第二次及后续调用很重要
+        // 重置动画状态
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
@@ -149,24 +345,15 @@ namespace screenshot_tool {
             KillTimer(hwnd_, backgroundCheckTimerId_);
             backgroundCheckTimerId_ = 0;
         }
-        fadingIn_ = fadingOut_ = fadingToFullOpaque_ = false;
-        alpha_ = 0;  // 重置透明度
+        fadingIn_ = false;
+        fadingOut_ = false;
+        alpha_ = 0;
         
-        // *** 关键修复1：先隐藏窗口，避免显示旧内容 ***
         ShowWindow(hwnd_, SW_HIDE);
-        
-        // 清理旧的双缓冲区，将在第一次绘制时重新创建
-        destroyBackBuffer();
-        
-        // *** 关键修复2：清理旧的背景图像，避免显示上一次的冻结帧 ***
-        destroyBackgroundBitmap();
         
         // 存储虚拟桌面偏移信息
         virtualDesktopLeft_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
         virtualDesktopTop_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        
-        // 创建字体资源
-        createFont();
         
         // 设置窗口位置和大小
         SetWindowPos(hwnd_, HWND_TOPMOST, 
@@ -175,70 +362,40 @@ namespace screenshot_tool {
                     displayRect.bottom - displayRect.top, 
                     SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         
-        // 设置窗口完全透明，等待背景图像加载
-        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
+        // 调整D3D渲染器大小
+        resizeD3DRenderer(displayRect.right - displayRect.left, displayRect.bottom - displayRect.top);
         
-        // 设置键盘焦点以接收ESC键
+        // 设置窗口完全透明，等待背景图像加载
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 0, LWA_COLORKEY | LWA_ALPHA);
+        
         SetFocus(hwnd_);
     }
 
-    // ---- 淡入淡出动画实现 ----
     void SelectionOverlay::startFadeIn() {
-        // 停止之前的动画和定时器
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
         }
         
-        // 强制重置所有动画状态
-        fadingIn_ = false;
-        fadingOut_ = false;
-        fadingToFullOpaque_ = false;
-        
-        // 启动基于时间的淡入动画
         alpha_ = 0;
         fadingIn_ = true;
+        fadingOut_ = false;
         
-        // 记录动画开始时间
-        QueryPerformanceCounter(&animationStartTime_);
+        ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
         
-        // 窗口始终完全不透明，通过内容渲染控制视觉效果
-        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
-        
-        // 启动超高帧率动画定时器
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, fadeInterval_, nullptr);
-        if (!timerId_) {
-            // 如果定时器创建失败，直接显示最终效果
-            alpha_ = TARGET_ALPHA;
-            fadingIn_ = false;
-            InvalidateRect(hwnd_, nullptr, FALSE);
-            return;
-        }
-        
-        // 立即触发重绘显示初始状态
-        InvalidateRect(hwnd_, nullptr, FALSE);
-    }
-
-    void SelectionOverlay::startFadeToFullOpaque() {
-        // 确保窗口完全不透明
-        alpha_ = TARGET_ALPHA;
-        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
-        
-        // 触发重绘
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
     void SelectionOverlay::startFadeOut() {
-        // 停止之前的动画
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
         }
         
-        // 启动基于时间的淡出动画
         fadingIn_ = false;
         fadingOut_ = true;
-        fadingToFullOpaque_ = false;
         
         // 如果当前alpha为0，直接隐藏
         if (alpha_ <= 0) {
@@ -248,659 +405,308 @@ namespace screenshot_tool {
             return;
         }
         
-        // 记录动画开始时间
-        QueryPerformanceCounter(&animationStartTime_);
-        
-        // 启动超高帧率淡出动画定时器
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, fadeInterval_, nullptr);
-        if (!timerId_) {
-            // 如果定时器创建失败，直接隐藏
-            alpha_ = 0;
-            fadingOut_ = false;
-            ShowWindow(hwnd_, SW_HIDE);
-            return;
-        }
     }
 
     void SelectionOverlay::updateFade() {
-        // 获取当前动画进度（0.0 到 1.0）
-        double progress = getAnimationProgress();
-        
         if (fadingIn_) {
-            // 淡入：从0到TARGET_ALPHA的平滑过渡
-            alpha_ = static_cast<BYTE>(TARGET_ALPHA * progress);
+            alpha_ = static_cast<BYTE>(std::min<int>(alpha_ + 16, TARGET_ALPHA));
+            SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
             
-            if (progress >= 1.0) {
-                alpha_ = TARGET_ALPHA;
+            if (alpha_ >= TARGET_ALPHA) {
                 fadingIn_ = false;
-                if (timerId_) {
-                    KillTimer(hwnd_, timerId_);
-                    timerId_ = 0;
-                }
-            }
-        } else if (fadingToFullOpaque_) {
-            // 淡入到完全不透明：从当前值到255的平滑过渡
-            BYTE startAlpha = (alpha_ < TARGET_ALPHA) ? TARGET_ALPHA : alpha_;
-            alpha_ = static_cast<BYTE>(startAlpha + (255 - startAlpha) * progress);
-            
-            if (progress >= 1.0) {
-                alpha_ = 255;
-                fadingToFullOpaque_ = false;
-                if (timerId_) {
-                    KillTimer(hwnd_, timerId_);
-                    timerId_ = 0;
-                }
-            }
-        } else if (fadingOut_) {
-            // 淡出：从当前alpha到0的平滑过渡
-            BYTE startAlpha = alpha_;
-            alpha_ = static_cast<BYTE>(startAlpha * (1.0 - progress));
-            
-            if (progress >= 1.0) {
-                alpha_ = 0;
-                fadingOut_ = false;
-                if (timerId_) {
-                    KillTimer(hwnd_, timerId_);
-                    timerId_ = 0;
-                }
-                // 淡出完成时隐藏窗口
-                ShowWindow(hwnd_, SW_HIDE);
-                return; // 直接返回，不再重绘
-            }
-        } else {
-            // 错误状态：没有任何动画正在进行，但定时器仍在运行
-            if (timerId_) {
                 KillTimer(hwnd_, timerId_);
                 timerId_ = 0;
             }
-            return; // 直接返回，不更新窗口
-        }
-        
-        // 使用更精确的重绘：仅标记需要重绘，让系统优化
-        InvalidateRect(hwnd_, nullptr, FALSE);
-    }
-
-    void SelectionOverlay::onFadeComplete() {
-        // 确保所有动画状态都被重置
-        fadingIn_ = false;
-        fadingOut_ = false;
-        fadingToFullOpaque_ = false;
-        
-        // 停止任何可能的定时器
-        if (timerId_) {
-            KillTimer(hwnd_, timerId_);
-            timerId_ = 0;
-        }
-    }
-
-    // ---- 双缓冲绘制实现 ----
-    void SelectionOverlay::createBackBuffer(int width, int height) {
-        // 如果尺寸没有变化，不需要重新创建
-        if (memDC_ && bufferWidth_ == width && bufferHeight_ == height) {
-            return;
-        }
-        
-        // 清理旧的缓冲区
-        destroyBackBuffer();
-        
-        // 创建新的双缓冲区
-        HDC hdc = GetDC(hwnd_);
-        if (hdc) {
-            memDC_ = CreateCompatibleDC(hdc);
-            if (memDC_) {
-                memBitmap_ = CreateCompatibleBitmap(hdc, width, height);
-                if (memBitmap_) {
-                    oldBitmap_ = (HBITMAP)SelectObject(memDC_, memBitmap_);
-                    bufferWidth_ = width;
-                    bufferHeight_ = height;
+        } else if (fadingOut_) {
+            if (alpha_ <= 16) {
+                alpha_ = 0;
+                SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
+                fadingOut_ = false;
+                KillTimer(hwnd_, timerId_);
+                timerId_ = 0;
+                ShowWindow(hwnd_, SW_HIDE);
+                
+                auto style = GetWindowLong(hwnd_, GWL_EXSTYLE);
+                SetWindowLong(hwnd_, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
+                selecting_ = false;
+                
+                if (notifyOnHide_ && parent_) {
+                    PostMessage(parent_, WM_USER + 100, 0, 0);
                 }
-            }
-            ReleaseDC(hwnd_, hdc);
-        }
-    }
-
-    void SelectionOverlay::destroyBackBuffer() {
-        if (memDC_) {
-            if (oldBitmap_) {
-                SelectObject(memDC_, oldBitmap_);
-                oldBitmap_ = nullptr;
-            }
-            DeleteDC(memDC_);
-            memDC_ = nullptr;
-        }
-        
-        if (memBitmap_) {
-            DeleteObject(memBitmap_);
-            memBitmap_ = nullptr;
-        }
-        
-        bufferWidth_ = bufferHeight_ = 0;
-    }
-
-    void SelectionOverlay::renderToBackBuffer() {
-        if (!memDC_) return;
-        
-        RECT clientRect = { 0, 0, bufferWidth_, bufferHeight_ };
-        
-        // 根据动画透明度调整渲染效果
-        BYTE renderAlpha = alpha_;  // 用于内容渲染的透明度
-        
-        // 如果有背景图像，显示暗化的背景图像
-        if (backgroundBitmap_) {
-            // 创建临时DC来处理背景图像
-            HDC backgroundDC = CreateCompatibleDC(memDC_);
-            if (backgroundDC) {
-                HBITMAP oldBackgroundBitmap = (HBITMAP)SelectObject(backgroundDC, backgroundBitmap_);
-                
-                // 获取窗口在虚拟桌面中的位置
-                RECT windowRect;
-                GetWindowRect(hwnd_, &windowRect);
-                
-                // 使用存储的虚拟桌面偏移信息
-                int offsetX = windowRect.left - virtualDesktopLeft_;
-                int offsetY = windowRect.top - virtualDesktopTop_;
-                
-                // 将背景图像复制到后台缓冲区
-                BitBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_,
-                      backgroundDC, offsetX, offsetY, SRCCOPY);
-                
-                SelectObject(backgroundDC, oldBackgroundBitmap);
-                DeleteDC(backgroundDC);
-                
-                // 根据动画透明度创建渐变的暗化效果
-                if (renderAlpha > 0) {
-                    HBRUSH darkenBrush = CreateSolidBrush(OverlayColors::DARKEN_MASK);
-                    HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, darkenBrush);
-                    
-                    // 设置混合模式
-                    int oldBkMode = SetBkMode(memDC_, TRANSPARENT);
-                    
-                    // 根据动画透明度调整暗化强度
-                    BLENDFUNCTION blend = {0};
-                    blend.BlendOp = AC_SRC_OVER;
-                    blend.BlendFlags = 0;
-                    blend.SourceConstantAlpha = (BYTE)((120 * renderAlpha) / TARGET_ALPHA); // 动态调整暗化强度
-                    blend.AlphaFormat = 0;
-                    
-                    // 检查是否可以使用AlphaBlend
-                    HMODULE hMsimg32 = GetModuleHandleW(L"msimg32.dll");
-                    if (!hMsimg32) {
-                        hMsimg32 = LoadLibraryW(L"msimg32.dll");
-                    }
-                    
-                    if (hMsimg32) {
-                        typedef BOOL (WINAPI *AlphaBlendProc)(HDC, int, int, int, int, HDC, int, int, int, int, BLENDFUNCTION);
-                        AlphaBlendProc pAlphaBlend = (AlphaBlendProc)GetProcAddress(hMsimg32, "AlphaBlend");
-                        
-                        if (pAlphaBlend && blend.SourceConstantAlpha > 0) {
-                            // 创建临时暗化DC
-                            HDC darkenDC = CreateCompatibleDC(memDC_);
-                            if (darkenDC) {
-                                HBITMAP darkenBitmap = CreateCompatibleBitmap(memDC_, bufferWidth_, bufferHeight_);
-                                if (darkenBitmap) {
-                                    HBITMAP oldDarkenBitmap = (HBITMAP)SelectObject(darkenDC, darkenBitmap);
-                                    
-                                    // 用统一的暗化颜色填充暗化位图
-                                    FillRect(darkenDC, &clientRect, darkenBrush);
-                                    
-                                    // 应用AlphaBlend暗化
-                                    pAlphaBlend(memDC_, 0, 0, bufferWidth_, bufferHeight_,
-                                               darkenDC, 0, 0, bufferWidth_, bufferHeight_, blend);
-                                    
-                                    SelectObject(darkenDC, oldDarkenBitmap);
-                                    DeleteObject(darkenBitmap);
-                                }
-                                DeleteDC(darkenDC);
-                            }
-                        } else if (renderAlpha > (TARGET_ALPHA / 2)) {
-                            // AlphaBlend不可用或透明度过低，在透明度足够时使用简单暗化
-                            PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
-                            FillRect(memDC_, &clientRect, darkenBrush);
-                            PatBlt(memDC_, 0, 0, bufferWidth_, bufferHeight_, PATINVERT);
-                        }
-                    } else if (renderAlpha > (TARGET_ALPHA / 2)) {
-                        // 无法加载msimg32.dll，在透明度足够时使用基本暗化
-                        FillRect(memDC_, &clientRect, darkenBrush);
-                    }
-                    
-                    SetBkMode(memDC_, oldBkMode);
-                    SelectObject(memDC_, oldBrush);
-                    DeleteObject(darkenBrush);
-                }
-                // 如果 renderAlpha == 0，显示原始背景图像（不暗化）
+                notifyOnHide_ = false;
+            } else {
+                alpha_ = static_cast<BYTE>(alpha_ - 16);
+                SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
             }
         } else {
-            // 没有背景图像时，始终显示透明（等待背景加载）
-            HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
-            HBRUSH oldBrush = (HBRUSH)SelectObject(memDC_, clearBrush);
-            FillRect(memDC_, &clientRect, clearBrush);
-            SelectObject(memDC_, oldBrush);
-            DeleteObject(clearBrush);
-        }
-        
-        // 如果正在选择，在选择区域恢复原始背景（清除暗化效果）
-        if (selecting_) {
-            // 计算选择区域
-            RECT selectionRect = {
-                std::min(start_.x, cur_.x),
-                std::min(start_.y, cur_.y),
-                std::max(start_.x, cur_.x),
-                std::max(start_.y, cur_.y)
-            };
-            
-            // 如果有背景图像，在选择区域恢复原始背景（清除暗化效果）
-            if (backgroundBitmap_) {
-                HDC backgroundDC = CreateCompatibleDC(memDC_);
-                if (backgroundDC) {
-                    HBITMAP oldBackgroundBitmap = (HBITMAP)SelectObject(backgroundDC, backgroundBitmap_);
-                    
-                    // 获取窗口在虚拟桌面中的位置
-                    RECT windowRect;
-                    GetWindowRect(hwnd_, &windowRect);
-                    
-                    // 使用存储的虚拟桌面偏移信息
-                    int offsetX = windowRect.left - virtualDesktopLeft_;
-                    int offsetY = windowRect.top - virtualDesktopTop_;
-                    
-                    // 在选择区域恢复原始背景（清除暗化效果）
-                    BitBlt(memDC_, selectionRect.left, selectionRect.top,
-                          selectionRect.right - selectionRect.left,
-                          selectionRect.bottom - selectionRect.top,
-                          backgroundDC, 
-                          offsetX + selectionRect.left, 
-                          offsetY + selectionRect.top, 
-                          SRCCOPY);
-                    
-                    SelectObject(backgroundDC, oldBackgroundBitmap);
-                    DeleteDC(backgroundDC);
-                }
-            } else {
-                // 没有背景图像时，使用透明键颜色填充选择区域
-                HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
-                HBRUSH oldBrush2 = (HBRUSH)SelectObject(memDC_, clearBrush);
-                FillRect(memDC_, &selectionRect, clearBrush);
-                SelectObject(memDC_, oldBrush2);
-                DeleteObject(clearBrush);
-            }
-            
-            // 绘制选择框边框
-            HPEN pen = CreatePen(PS_SOLID, 2, OverlayColors::SELECTION_BORDER);
-            HPEN oldPen = (HPEN)SelectObject(memDC_, pen);
-            SetBkMode(memDC_, TRANSPARENT);
-            
-            MoveToEx(memDC_, selectionRect.left, selectionRect.top, nullptr);
-            LineTo(memDC_, selectionRect.right, selectionRect.top);
-            LineTo(memDC_, selectionRect.right, selectionRect.bottom);
-            LineTo(memDC_, selectionRect.left, selectionRect.bottom);
-            LineTo(memDC_, selectionRect.left, selectionRect.top);
-            
-            SelectObject(memDC_, oldPen);
-            DeleteObject(pen);
-            
-            // 显示尺寸信息
-            drawSizeText(memDC_, selectionRect);
-        }
-    }
-
-    void SelectionOverlay::createMaskForSelection() {
-        // 这个方法可以用于更复杂的遮罩创建，目前在renderToBackBuffer中直接处理
-    }
-    
-    // ---- 背景图像相关方法实现 ----
-    void SelectionOverlay::SetBackgroundImage(const uint8_t* imageData, int width, int height, int stride) {
-        if (!imageData || width <= 0 || height <= 0) {
-            destroyBackgroundBitmap();
-            return;
-        }
-        
-        createBackgroundBitmap(imageData, width, height, stride);
-        
-        // 停止背景检测定时器，因为背景已经设置成功
-        if (backgroundCheckTimerId_) {
-            KillTimer(hwnd_, backgroundCheckTimerId_);
-            backgroundCheckTimerId_ = 0;
-        }
-        
-        // 背景图像设置成功，现在显示窗口并启动淡入动画
-        if (hwnd_) {
-            // 先显示窗口
-            ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-            
-            // 立即重绘，确保显示背景图像
-            InvalidateRect(hwnd_, nullptr, FALSE);
-            UpdateWindow(hwnd_);
-            
-            // 现在启动动画系统
-            startFadeIn();
-        }
-    }
-    
-    void SelectionOverlay::StartWaitingForBackground(std::function<void()> backgroundCheckCallback) {
-        backgroundCheckCallback_ = std::move(backgroundCheckCallback);
-        
-        // 启动背景检测定时器
-        if (hwnd_) {
-            backgroundCheckTimerId_ = SetTimer(hwnd_, BACKGROUND_CHECK_TIMER_ID, BACKGROUND_CHECK_INTERVAL, nullptr);
-        }
-    }
-
-    void SelectionOverlay::createBackgroundBitmap(const uint8_t* imageData, int width, int height, int stride) {
-        // 清理旧的背景图像
-        destroyBackgroundBitmap();
-        
-        if (!hwnd_ || !imageData) return;
-        
-        HDC hdc = GetDC(hwnd_);
-        if (!hdc) return;
-        
-        // 创建设备兼容的位图
-        backgroundBitmap_ = CreateCompatibleBitmap(hdc, width, height);
-        if (backgroundBitmap_) {
-            HDC memDC = CreateCompatibleDC(hdc);
-            if (memDC) {
-                HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, backgroundBitmap_);
-                
-                // 创建位图信息结构 - PixelConvert已经输出RGB格式，但Windows期望BGR
-                BITMAPINFO bmi = {};
-                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-                bmi.bmiHeader.biWidth = width;
-                bmi.bmiHeader.biHeight = -height; // 负值表示自上而下的位图
-                bmi.bmiHeader.biPlanes = 1;
-                bmi.bmiHeader.biBitCount = 24; // 24位RGB格式
-                bmi.bmiHeader.biCompression = BI_RGB;
-                
-                // PixelConvert输出的是RGB格式，但Windows位图需要BGR 格式
-                // 需要转换RGB到BGR
-                std::vector<uint8_t> bgrData(width * height * 3);
-                for (int y = 0; y < height; ++y) {
-                    for (int x = 0; x < width; ++x) {
-                        int srcIndex = y * stride + x * 3;
-                        int dstIndex = y * width * 3 + x * 3;
-                        
-                        // 边界检查
-                        if (srcIndex + 2 < static_cast<int>(stride * height) && 
-                            dstIndex + 2 < static_cast<int>(bgrData.size())) {
-                            // RGB -> BGR转换
-                            bgrData[dstIndex + 0] = imageData[srcIndex + 2]; // B
-                            bgrData[dstIndex + 1] = imageData[srcIndex + 1]; // G  
-                            bgrData[dstIndex + 2] = imageData[srcIndex + 0]; // R
-                        }
-                    }
-                }
-                
-                // 将转换后的图像数据写入位图
-                SetDIBits(memDC, backgroundBitmap_, 0, height, bgrData.data(), &bmi, DIB_RGB_COLORS);
-                
-                backgroundWidth_ = width;
-                backgroundHeight_ = height;
-                
-                SelectObject(memDC, oldBitmap);
-                DeleteDC(memDC);
-            } else {
-                DeleteObject(backgroundBitmap_);
-                backgroundBitmap_ = nullptr;
-            }
-        }
-        
-        ReleaseDC(hwnd_, hdc);
-    }
-    
-    void SelectionOverlay::destroyBackgroundBitmap() {
-        if (backgroundBitmap_) {
-            DeleteObject(backgroundBitmap_);
-            backgroundBitmap_ = nullptr;
-        }
-        backgroundWidth_ = backgroundHeight_ = 0;
-    }
-
-    // ---- 字体相关方法实现 ----
-    void SelectionOverlay::createFont() {
-        // 如果字体已存在，先清理
-        destroyFont();
-        
-        // 创建高质量的字体用于显示尺寸信息
-        sizeFont_ = CreateFontW(
-            -16,                    // 字体高度
-            0,                      // 字体宽度（0表示自动计算）
-            0,                      // 文字输出角度
-            0,                      // 字体倾斜角度
-            FW_NORMAL,              // 字体粗细
-            FALSE,                  // 是否斜体
-            FALSE,                  // 是否下划线
-            FALSE,                  // 是否删除线
-            DEFAULT_CHARSET,        // 字符集
-            OUT_TT_PRECIS,          // 输出精度
-            CLIP_DEFAULT_PRECIS,    // 裁剪精度
-            CLEARTYPE_QUALITY,      // 字体质量（ClearType抗锯齿）
-            DEFAULT_PITCH | FF_SWISS, // 字体族
-            L"Segoe UI"             // 字体名称
-        );
-        
-        // 如果Segoe UI不可用，使用备用字体
-        if (!sizeFont_) {
-            sizeFont_ = CreateFontW(
-                -16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial"
-            );
-        }
-        
-        // 如果还是失败，使用系统默认字体
-        if (!sizeFont_) {
-            sizeFont_ = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        }
-    }
-    
-    void SelectionOverlay::destroyFont() {
-        if (sizeFont_ && sizeFont_ != GetStockObject(DEFAULT_GUI_FONT)) {
-            DeleteObject(sizeFont_);
-            sizeFont_ = nullptr;
-        }
-    }
-    
-    void SelectionOverlay::drawSizeText(HDC hdc, const RECT& selectionRect) {
-        if (!sizeFont_) return;
-        
-        int width = abs(cur_.x - start_.x);
-        int height = abs(cur_.y - start_.y);
-        
-        // 格式化尺寸文本为 "1920 × 1080" 格式
-        wchar_t sizeText[64];
-        swprintf_s(sizeText, L"%d × %d", width, height);
-        
-        // 选择字体
-        HFONT oldFont = (HFONT)SelectObject(hdc, sizeFont_);
-        
-        // 计算文本尺寸
-        SIZE textSize;
-        GetTextExtentPoint32W(hdc, sizeText, (int)wcslen(sizeText), &textSize);
-        
-        // 计算文本位置
-        int textX = std::min(start_.x, cur_.x);
-        int textY = std::min(start_.y, cur_.y) - textSize.cy - 8;
-        
-        // 如果文本会显示在顶部之外，则显示在选择框内部
-        if (textY < 5) {
-            textY = std::min(start_.y, cur_.y) + 8;
-        }
-        
-        // 确保文本不会超出左边界
-        if (textX < 5) textX = 5;
-        
-        // 创建文本背景区域
-        RECT textBgRect = {
-            textX - 6, textY - 3,
-            textX + textSize.cx + 6, textY + textSize.cy + 3
-        };
-        
-        // 绘制半透明的文本背景
-        HBRUSH bgBrush = CreateSolidBrush(OverlayColors::TEXT_BACKGROUND);
-        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, bgBrush);
-        
-        // 绘制圆角背景矩形
-        RoundRect(hdc, textBgRect.left, textBgRect.top, textBgRect.right, textBgRect.bottom, 6, 6);
-        
-        SelectObject(hdc, oldBrush);
-        DeleteObject(bgBrush);
-        
-        // 设置文本渲染属性
-        SetTextColor(hdc, OverlayColors::TEXT_COLOR);
-        SetBkMode(hdc, TRANSPARENT);
-        
-        // 绘制文本
-        TextOutW(hdc, textX, textY, sizeText, (int)wcslen(sizeText));
-        
-        // 恢复原字体
-        SelectObject(hdc, oldFont);
-    }
-
-    void SelectionOverlay::startSelect(int x, int y) { 
-        selecting_ = true; 
-        start_.x = x; 
-        start_.y = y; 
-        cur_ = start_; 
-        
-        // 捕获鼠标以确保在缩小区域时不会丢失追踪
-        SetCapture(hwnd_);
-        
-        // 开始选择时，立即停止任何动画并确保窗口完全可见
-        if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
         }
-        fadingIn_ = false;
-        fadingOut_ = false;
-        fadingToFullOpaque_ = false;  // 重置所有动画状态
-        alpha_ = 255;
-        
-        // 确保窗口完全可见，只使用颜色键透明度
-        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
-        
-        InvalidateRect(hwnd_, nullptr, FALSE); 
     }
-    
-    void SelectionOverlay::updateSelect(int x, int y) { 
-        // 如果使用显示器约束，限制坐标在约束范围内
-        if (useMonitorConstraint_) {
-            RECT windowRect;
-            GetWindowRect(hwnd_, &windowRect);
-            
-            // 将窗口坐标转换为屏幕坐标
-            int screenX = x + windowRect.left;
-            int screenY = y + windowRect.top;
-            
-            // 限制在约束范围内
-            screenX = std::max(static_cast<int>(monitorConstraint_.left), 
-                              std::min(screenX, static_cast<int>(monitorConstraint_.right) - 1));
-            screenY = std::max(static_cast<int>(monitorConstraint_.top), 
-                              std::min(screenY, static_cast<int>(monitorConstraint_.bottom) - 1));
-            
-            // 转换回窗口坐标
-            x = screenX - windowRect.left;
-            y = screenY - windowRect.top;
+
+    // ---- D3D渲染实现 - 唯一的渲染路径 ----
+    void SelectionOverlay::renderWithD3D() {
+        if (!d2dRenderTarget_) return;
+
+        // 开始D2D绘制
+        d2dRenderTarget_->BeginDraw();
+
+        // 清除背景为透明（用于分层窗口）
+        d2dRenderTarget_->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+
+        // 如果有背景图像，绘制背景
+        if (backgroundBitmap_) {
+            renderBackgroundWithD3D();
         }
+
+        // 绘制暗化遮罩层（除了选择区域）
+        renderDarkenMaskWithD3D();
+
+        // 如果正在选择，绘制选择框和尺寸信息
+        if (selecting_) {
+            renderSelectionBoxWithD3D();
+            renderSizeTextWithD3D();
+        }
+
+        // 结束D2D绘制
+        HRESULT hr = d2dRenderTarget_->EndDraw();
+        if (FAILED(hr)) {
+            Logger::Error(L"D2D EndDraw failed: {:#x}", static_cast<uint32_t>(hr));
+            return;
+        }
+
+        // 显示到屏幕
+        hr = dxgiSwapChain_->Present(0, 0);
+        if (FAILED(hr)) {
+            Logger::Error(L"DXGI Present failed: {:#x}", static_cast<uint32_t>(hr));
+        }
+    }
+
+    void SelectionOverlay::renderBackgroundWithD3D() {
+        if (!d2dRenderTarget_ || !backgroundBitmap_) return;
+
+        // 创建D2D位图从GDI位图
+        ComPtr<ID2D1Bitmap> d2dBitmap;
+        createD2DBitmapFromGDI(backgroundBitmap_, &d2dBitmap);
         
-        // 只在坐标真正变化时才重绘 - 这对性能很重要
-        if (cur_.x != x || cur_.y != y) {
-            // 计算旧的选择区域
-            RECT oldRect = {
-                std::min(start_.x, cur_.x),
-                std::min(start_.y, cur_.y),
-                std::max(start_.x, cur_.x),
-                std::max(start_.y, cur_.y)
-            };
-            
-            // 更新坐标
-            cur_.x = x; 
-            cur_.y = y; 
-            
-            // 计算新的选择区域
-            RECT newRect = {
-                std::min(start_.x, cur_.x),
-                std::min(start_.y, cur_.y),
-                std::max(start_.x, cur_.x),
-                std::max(start_.y, cur_.y)
-            };
-            
-            // 计算需要重绘的总区域（包括旧区域和新区域）
-            RECT unionRect;
-            UnionRect(&unionRect, &oldRect, &newRect);
-            
-            // 优化：减小边界扩展，从100减少到30，减少重绘面积
-            InflateRect(&unionRect, 30, 30);
-            
-            // 确保重绘区域在窗口范围内
+        if (d2dBitmap) {
             RECT clientRect;
             GetClientRect(hwnd_, &clientRect);
-            IntersectRect(&unionRect, &unionRect, &clientRect);
             
-            // 重绘计算出的区域
-            InvalidateRect(hwnd_, &unionRect, FALSE);
+            D2D1_RECT_F destRect = D2D1::RectF(
+                0.0f, 0.0f, 
+                static_cast<float>(clientRect.right), 
+                static_cast<float>(clientRect.bottom)
+            );
+            
+            // 绘制背景图像，拉伸到窗口大小
+            d2dRenderTarget_->DrawBitmap(d2dBitmap.Get(), destRect, 1.0f, 
+                                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
-    }
-    
-    void SelectionOverlay::finishSelect() { 
-        if (!selecting_) return; 
-        selecting_ = false; 
-        
-        // 释放鼠标捕获
-        ReleaseCapture();
-        
-        RECT selectedRect = RECT{ 
-            std::min(start_.x, cur_.x), 
-            std::min(start_.y, cur_.y), 
-            std::max(start_.x, cur_.x), 
-            std::max(start_.y, cur_.y) 
-        }; 
-        
-        // 将窗口坐标转换为屏幕坐标
-        RECT windowRect;
-        GetWindowRect(hwnd_, &windowRect);
-        
-        selectedRect.left += windowRect.left;
-        selectedRect.top += windowRect.top;
-        selectedRect.right += windowRect.left;
-        selectedRect.bottom += windowRect.top;
-        
-        // 立即触发回调
-        if (cb_) {
-            cb_(selectedRect);
-        }
-        
-        // 开始淡出动画
-        startFadeOut();
     }
 
-    void SelectionOverlay::cancelSelection() {
-        if (!hwnd_) return;
+    void SelectionOverlay::renderDarkenMaskWithD3D() {
+        if (!d2dRenderTarget_) return;
+
+        RECT clientRect;
+        GetClientRect(hwnd_, &clientRect);
+
+        // 创建半透明暗化画刷
+        ComPtr<ID2D1SolidColorBrush> darkenBrush;
+        HRESULT hr = d2dRenderTarget_->CreateSolidColorBrush(
+            D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.5f), &darkenBrush);
         
-        // 如果正在选择，释放鼠标捕获
+        if (FAILED(hr)) return;
+
+        D2D1_RECT_F fullRect = D2D1::RectF(
+            0.0f, 0.0f, 
+            static_cast<float>(clientRect.right), 
+            static_cast<float>(clientRect.bottom)
+        );
+
         if (selecting_) {
-            ReleaseCapture();
+            // 绘制除选择区域外的暗化遮罩
+            D2D1_RECT_F selectionRect = D2D1::RectF(
+                static_cast<float>(std::min(start_.x, cur_.x)),
+                static_cast<float>(std::min(start_.y, cur_.y)),
+                static_cast<float>(std::max(start_.x, cur_.x)),
+                static_cast<float>(std::max(start_.y, cur_.y))
+            );
+
+            // 使用几何形状创建镂空效果
+            ComPtr<ID2D1PathGeometry> pathGeometry;
+            hr = d2dFactory_->CreatePathGeometry(&pathGeometry);
+            if (FAILED(hr)) return;
+
+            ComPtr<ID2D1GeometrySink> geometrySink;
+            hr = pathGeometry->Open(&geometrySink);
+            if (FAILED(hr)) return;
+
+            // 创建外部矩形，内部镂空选择区域
+            geometrySink->SetFillMode(D2D1_FILL_MODE_WINDING);
+            
+            // 外部矩形
+            geometrySink->BeginFigure(D2D1::Point2F(fullRect.left, fullRect.top), D2D1_FIGURE_BEGIN_FILLED);
+            geometrySink->AddLine(D2D1::Point2F(fullRect.right, fullRect.top));
+            geometrySink->AddLine(D2D1::Point2F(fullRect.right, fullRect.bottom));
+            geometrySink->AddLine(D2D1::Point2F(fullRect.left, fullRect.bottom));
+            geometrySink->EndFigure(D2D1_FIGURE_END_CLOSED);
+
+            // 内部镂空矩形（选择区域）
+            geometrySink->BeginFigure(D2D1::Point2F(selectionRect.left, selectionRect.top), D2D1_FIGURE_BEGIN_FILLED);
+            geometrySink->AddLine(D2D1::Point2F(selectionRect.left, selectionRect.bottom));
+            geometrySink->AddLine(D2D1::Point2F(selectionRect.right, selectionRect.bottom));
+            geometrySink->AddLine(D2D1::Point2F(selectionRect.right, selectionRect.top));
+            geometrySink->EndFigure(D2D1_FIGURE_END_CLOSED);
+
+            hr = geometrySink->Close();
+            if (FAILED(hr)) return;
+
+            // 填充镂空的暗化区域
+            d2dRenderTarget_->FillGeometry(pathGeometry.Get(), darkenBrush.Get());
+        } else {
+            // 没有选择时，全屏暗化
+            d2dRenderTarget_->FillRectangle(fullRect, darkenBrush.Get());
         }
-        
-        // 取消选择状态
-        selecting_ = false;
-        start_.x = start_.y = 0;
-        cur_.x = cur_.y = 0;
-        memset(&selectedRect_, 0, sizeof(selectedRect_));
-        notifyOnHide_ = false;
-        
-        // 开始淡出动画
-        startFadeOut();
     }
 
-    LRESULT CALLBACK SelectionOverlay::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) { 
-        SelectionOverlay* self = (SelectionOverlay*)GetWindowLongPtr(h, GWLP_USERDATA); 
-        if (m == WM_NCCREATE) { 
-            CREATESTRUCT* cs = (CREATESTRUCT*)l; 
-            SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams); 
-            return DefWindowProc(h, m, w, l); 
+    void SelectionOverlay::renderSelectionBoxWithD3D() {
+        if (!d2dRenderTarget_ || !selecting_) return;
+
+        D2D1_RECT_F selectionRect = D2D1::RectF(
+            static_cast<float>(std::min(start_.x, cur_.x)),
+            static_cast<float>(std::min(start_.y, cur_.y)),
+            static_cast<float>(std::max(start_.x, cur_.x)),
+            static_cast<float>(std::max(start_.y, cur_.y))
+        );
+
+        // 使用预创建的白色画刷绘制选择框边框
+        if (d2dWhiteBrush_) {
+            d2dRenderTarget_->DrawRectangle(selectionRect, d2dWhiteBrush_.Get(), 2.0f);
         }
-        if (!self) return DefWindowProc(h, m, w, l); 
-        return self->instanceProc(h, m, w, l); 
     }
 
+    void SelectionOverlay::renderSizeTextWithD3D() {
+        if (!d2dRenderTarget_ || !dwriteTextFormat_ || !selecting_) return;
+
+        int width = abs(cur_.x - start_.x);
+        int height = abs(cur_.y - start_.y);
+
+        // 格式化尺寸文本
+        wchar_t sizeText[64];
+        swprintf_s(sizeText, L"%d × %d", width, height);
+
+        // 计算文本布局
+        ComPtr<IDWriteTextLayout> textLayout;
+        HRESULT hr = dwriteFactory_->CreateTextLayout(
+            sizeText,
+            static_cast<UINT32>(wcslen(sizeText)),
+            dwriteTextFormat_.Get(),
+            200.0f,  // 最大宽度
+            50.0f,   // 最大高度
+            &textLayout
+        );
+
+        if (FAILED(hr)) return;
+
+        // 获取文本尺寸
+        DWRITE_TEXT_METRICS textMetrics;
+        hr = textLayout->GetMetrics(&textMetrics);
+        if (FAILED(hr)) return;
+
+        // 计算文本位置
+        float textX = static_cast<float>(std::min(start_.x, cur_.x));
+        float textY = static_cast<float>(std::min(start_.y, cur_.y)) - textMetrics.height - 8.0f;
+
+        // 如果文本会显示在顶部之外，则显示在选择框内部
+        if (textY < 5.0f) {
+            textY = static_cast<float>(std::min(start_.y, cur_.y)) + 8.0f;
+        }
+
+        // 确保文本不会超出左边界
+        if (textX < 5.0f) textX = 5.0f;
+
+        // 创建文本背景矩形
+        D2D1_RECT_F textBgRect = D2D1::RectF(
+            textX - 6.0f, textY - 3.0f,
+            textX + textMetrics.width + 6.0f, textY + textMetrics.height + 3.0f
+        );
+
+        // 绘制半透明的文本背景
+        if (d2dDarkBrush_) {
+            // 绘制圆角背景矩形
+            ComPtr<ID2D1RoundedRectangleGeometry> roundedRect;
+            hr = d2dFactory_->CreateRoundedRectangleGeometry(
+                D2D1::RoundedRect(textBgRect, 6.0f, 6.0f), &roundedRect);
+            
+            if (SUCCEEDED(hr)) {
+                d2dRenderTarget_->FillGeometry(roundedRect.Get(), d2dDarkBrush_.Get());
+            }
+        }
+
+        // 绘制文本
+        if (d2dWhiteBrush_) {
+            d2dRenderTarget_->DrawTextLayout(
+                D2D1::Point2F(textX, textY),
+                textLayout.Get(),
+                d2dWhiteBrush_.Get()
+            );
+        }
+    }
+
+    void SelectionOverlay::createD2DBitmapFromGDI(HBITMAP gdiBitmap, ID2D1Bitmap** d2dBitmap) {
+        if (!d2dRenderTarget_ || !gdiBitmap || !d2dBitmap) return;
+
+        *d2dBitmap = nullptr;
+
+        // 获取GDI位图信息
+        BITMAP bm;
+        if (GetObject(gdiBitmap, sizeof(BITMAP), &bm) == 0) return;
+
+        // 创建兼容的DC和选择位图
+        HDC memDC = CreateCompatibleDC(nullptr);
+        if (!memDC) return;
+
+        HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(memDC, gdiBitmap));
+
+        // 创建DIB数据
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = bm.bmWidth;
+        bmi.bmiHeader.biHeight = -bm.bmHeight; // 负数表示从上到下
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        std::vector<uint8_t> pixelData(bm.bmWidth * bm.bmHeight * 4);
+        
+        if (GetDIBits(memDC, gdiBitmap, 0, bm.bmHeight, pixelData.data(), &bmi, DIB_RGB_COLORS)) {
+            // 创建D2D位图属性
+            D2D1_BITMAP_PROPERTIES bitmapProps = D2D1::BitmapProperties(
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+                96.0f, 96.0f
+            );
+
+            // 创建D2D位图
+            HRESULT hr = d2dRenderTarget_->CreateBitmap(
+                D2D1::SizeU(bm.bmWidth, bm.bmHeight),
+                pixelData.data(),
+                bm.bmWidth * 4,
+                &bitmapProps,
+                d2dBitmap
+            );
+
+            if (FAILED(hr)) {
+                Logger::Error(L"Failed to create D2D bitmap: {:#x}", static_cast<uint32_t>(hr));
+            }
+        }
+
+        SelectObject(memDC, oldBmp);
+        DeleteDC(memDC);
+    }
+
+    // ---- 窗口消息处理 - 只使用D3D渲染 ----
     LRESULT SelectionOverlay::instanceProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         switch (m) {
         case WM_LBUTTONDOWN: 
@@ -930,88 +736,31 @@ namespace screenshot_tool {
             if (w == FADE_TIMER_ID) {
                 updateFade();
             } else if (w == BACKGROUND_CHECK_TIMER_ID) {
-                // 背景检测定时器
                 if (backgroundCheckCallback_) {
                     backgroundCheckCallback_();
+                } else {
+                    SetBackgroundImage(nullptr, 0, 0, 0);
                 }
             }
             return 0;
             
         case WM_PAINT: { 
             PAINTSTRUCT ps; 
-            HDC dc = BeginPaint(h, &ps); 
-            RECT c; 
-            GetClientRect(h, &c); 
+            BeginPaint(h, &ps); 
             
-            // 创建或更新双缓冲区
-            int width = c.right - c.left;
-            int height = c.bottom - c.top;
-            createBackBuffer(width, height);
-            
-            if (memDC_) {
-                // 渲染到后台缓冲区
-                renderToBackBuffer();
-                
-                // 将后台缓冲区内容复制到前台
-                BitBlt(dc, ps.rcPaint.left, ps.rcPaint.top,
-                      ps.rcPaint.right - ps.rcPaint.left,
-                      ps.rcPaint.bottom - ps.rcPaint.top,
-                      memDC_, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
-            } else {
-                // 双缓冲创建失败，回退到直接绘制
-                // 如果正在动画且alpha=0，显示透明，否则显示回退颜色
-                if ((fadingIn_ && alpha_ == 0) || (fadingOut_ && alpha_ == 0)) {
-                    // 动画状态且alpha=0时，使用透明键颜色（完全透明）
-                    HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
-                    HBRUSH oldBrush = (HBRUSH)SelectObject(dc, clearBrush);
-                    FillRect(dc, &c, clearBrush);
-                    SelectObject(dc, oldBrush);
-                    DeleteObject(clearBrush);
-                } else {
-                    // 非动画状态或alpha>0时，使用回退暗化颜色
-                    HBRUSH darkBrush = CreateSolidBrush(OverlayColors::DARKEN_FALLBACK);
-                    HBRUSH oldBrush = (HBRUSH)SelectObject(dc, darkBrush);
-                    FillRect(dc, &c, darkBrush);
-                    SelectObject(dc, oldBrush);
-                    DeleteObject(darkBrush);
-                }
-                
-                // 只在选择时绘制选择框
-                if (selecting_) {
-                    RECT selectionRect = {
-                        std::min(start_.x, cur_.x),
-                        std::min(start_.y, cur_.y),
-                        std::max(start_.x, cur_.x),
-                        std::max(start_.y, cur_.y)
-                    };
-                    
-                    // 用透明键颜色填充选择区域
-                    HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
-                    HBRUSH oldBrush2 = (HBRUSH)SelectObject(dc, clearBrush);
-                    FillRect(dc, &selectionRect, clearBrush);
-                    SelectObject(dc, oldBrush2);
-                    DeleteObject(clearBrush);
-                    
-                    // 绘制选择框边框
-                    HPEN pen = CreatePen(PS_SOLID, 2, OverlayColors::SELECTION_BORDER);
-                    HPEN oldPen = (HPEN)SelectObject(dc, pen);
-                    SetBkMode(dc, TRANSPARENT);
-                    
-                    MoveToEx(dc, selectionRect.left, selectionRect.top, nullptr);
-                    LineTo(dc, selectionRect.right, selectionRect.top);
-                    LineTo(dc, selectionRect.right, selectionRect.bottom);
-                    LineTo(dc, selectionRect.left, selectionRect.bottom);
-                    LineTo(dc, selectionRect.left, selectionRect.top);
-                    
-                    SelectObject(dc, oldPen);
-                    DeleteObject(pen);
-                    
-                    // 显示尺寸信息
-                    drawSizeText(dc, selectionRect);
-                }
-            }
+            // 只使用D3D渲染，不再有GDI回退
+            renderWithD3D();
             
             EndPaint(h, &ps); 
+            return 0;
+        }
+
+        case WM_SIZE: {
+            UINT width = LOWORD(l);
+            UINT height = HIWORD(l);
+            if (width > 0 && height > 0) {
+                resizeD3DRenderer(width, height);
+            }
             return 0;
         }
         
@@ -1020,75 +769,267 @@ namespace screenshot_tool {
         }
     }
 
-    // ---- 高精度基于时间的动画系统实现 ----
-    void SelectionOverlay::initializeAnimationSystem() {
-        // 获取性能计数器频率（用于高精度时间测量）
-        QueryPerformanceFrequency(&performanceFreq_);
+    void SelectionOverlay::BeginSelect() {
+        // 获取整个虚拟桌面区域
+        RECT virtualDesktop;
+        virtualDesktop.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        virtualDesktop.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        virtualDesktop.right = virtualDesktop.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        virtualDesktop.bottom = virtualDesktop.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
         
-        // 获取显示器刷新率
-        displayRefreshRate_ = getDisplayRefreshRate();
+        useMonitorConstraint_ = false;
+        ShowWithRect(virtualDesktop);
         
-        // 使用固定的超高频率定时器，确保极致流畅
-        fadeInterval_ = 5;  // 5ms = 200Hz，远超人眼感知
+        SetBackgroundImage(nullptr, 0, 0, 0);
+    }
+
+    void SelectionOverlay::BeginSelectOnMonitor(const RECT& monitorRect) {
+        useMonitorConstraint_ = true;
+        monitorConstraint_ = monitorRect;
+        ShowWithRect(monitorRect);
         
-        // 只在首次初始化时输出一次日志
-        static bool logged = false;
-        if (!logged) {
-            Logger::Debug(L"Animation system: {}Hz display, 200fps updates", displayRefreshRate_);
-            logged = true;
+        SetBackgroundImage(nullptr, 0, 0, 0);
+    }
+
+    void SelectionOverlay::StartWaitingForBackground(std::function<void()> backgroundCheckCallback) {
+        backgroundCheckCallback_ = std::move(backgroundCheckCallback);
+        
+        if (hwnd_) {
+            backgroundCheckTimerId_ = SetTimer(hwnd_, BACKGROUND_CHECK_TIMER_ID, BACKGROUND_CHECK_INTERVAL, nullptr);
         }
     }
+
+    void SelectionOverlay::startSelect(int x, int y) { 
+        selecting_ = true; 
+        start_.x = x; 
+        start_.y = y; 
+        cur_ = start_; 
+        
+        SetCapture(hwnd_);
+        
+        if (timerId_) {
+            KillTimer(hwnd_, timerId_);
+            timerId_ = 0;
+        }
+        fadingIn_ = false;
+        fadingOut_ = false;
+        alpha_ = 255;  // 选择时完全不透明
+        
+        SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
+        
+        InvalidateRect(hwnd_, nullptr, FALSE); 
+    }
     
-    UINT SelectionOverlay::getDisplayRefreshRate() {
-        if (!hwnd_) return 60;  // 默认60Hz
+    void SelectionOverlay::updateSelect(int x, int y) { 
+        // 性能优化：限制鼠标移动更新频率
+        DWORD currentTime = GetTickCount();
+        if (currentTime - lastUpdateTime_ < MIN_UPDATE_INTERVAL) {
+            return;
+        }
+        lastUpdateTime_ = currentTime;
         
-        // 获取窗口所在的显示器
-        HMONITOR hMonitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY);
-        
-        // 获取显示器信息
-        MONITORINFOEX monitorInfo = {};
-        monitorInfo.cbSize = sizeof(MONITORINFOEX);
-        
-        if (GetMonitorInfo(hMonitor, &monitorInfo)) {
-            // 获取显示设备的显示模式
-            DEVMODE devMode = {};
-            devMode.dmSize = sizeof(DEVMODE);
+        // 只在坐标真正变化时才重绘
+        if (cur_.x != x || cur_.y != y) {
+            // 计算旧的选择区域
+            RECT oldRect = {
+                std::min(start_.x, cur_.x),
+                std::min(start_.y, cur_.y),
+                std::max(start_.x, cur_.x),
+                std::max(start_.y, cur_.y)
+            };
             
-            if (EnumDisplaySettings(monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode)) {
-                if (devMode.dmDisplayFrequency > 0 && devMode.dmDisplayFrequency <= 500) {
-                    return devMode.dmDisplayFrequency;
+            // 更新坐标
+            cur_.x = x; 
+            cur_.y = y; 
+            
+            // 计算新的选择区域
+            RECT newRect = {
+                std::min(start_.x, cur_.x),
+                std::min(start_.y, cur_.y),
+                std::max(start_.x, cur_.x),
+                std::max(start_.y, cur_.y)
+            };
+            
+            // 计算需要重绘的总区域
+            RECT unionRect;
+            UnionRect(&unionRect, &oldRect, &newRect);
+            InflateRect(&unionRect, 20, 20);
+            
+            // 确保重绘区域在窗口范围内
+            RECT clientRect;
+            GetClientRect(hwnd_, &clientRect);
+            IntersectRect(&unionRect, &unionRect, &clientRect);
+            
+            // 重绘计算出的区域
+            InvalidateRect(hwnd_, &unionRect, FALSE);
+        }
+    }
+
+    void SelectionOverlay::finishSelect() { 
+        if (!selecting_) return; 
+        selecting_ = false; 
+        
+        ReleaseCapture();
+        
+        RECT selectedRect = RECT{ 
+            std::min(start_.x, cur_.x), 
+            std::min(start_.y, cur_.y), 
+            std::max(start_.x, cur_.x), 
+            std::max(start_.y, cur_.y) 
+        }; 
+        
+        // 将窗口坐标转换为屏幕坐标
+        RECT windowRect;
+        GetWindowRect(hwnd_, &windowRect);
+        
+        selectedRect.left += windowRect.left;
+        selectedRect.top += windowRect.top;
+        selectedRect.right += windowRect.left;
+        selectedRect.bottom += windowRect.top;
+        
+        // 存储选择结果
+        selectedRect_ = selectedRect;
+        notifyOnHide_ = true;
+        
+        // 立即触发回调
+        if (cb_) {
+            cb_(selectedRect);
+        }
+        
+        // 开始淡出动画
+        startFadeOut();
+    }
+
+    void SelectionOverlay::cancelSelection() {
+        if (!hwnd_) return;
+        
+        if (selecting_) {
+            ReleaseCapture();
+        }
+        
+        selecting_ = false;
+        start_.x = start_.y = 0;
+        cur_.x = cur_.y = 0;
+        memset(&selectedRect_, 0, sizeof(selectedRect_));
+        notifyOnHide_ = false;
+        
+        startFadeOut();
+    }
+
+    bool SelectionOverlay::IsValid() const {
+        return hwnd_ != nullptr;
+    }
+
+    // ---- 背景图像相关方法实现 ----
+    void SelectionOverlay::SetBackgroundImage(const uint8_t* imageData, int width, int height, int stride) {
+        if (hwnd_) {
+            if (backgroundCheckTimerId_) {
+                KillTimer(hwnd_, backgroundCheckTimerId_);
+                backgroundCheckTimerId_ = 0;
+            }
+            
+            if (imageData && width > 0 && height > 0) {
+                createBackgroundBitmap(imageData, width, height, stride);
+            }
+            
+            auto style = GetWindowLong(hwnd_, GWL_EXSTYLE);
+            SetWindowLong(hwnd_, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+            
+            startFadeIn();
+        }
+    }
+
+    void SelectionOverlay::createBackgroundBitmap(const uint8_t* imageData, int width, int height, int stride) {
+        // 清理旧的背景位图
+        destroyBackgroundBitmap();
+        
+        HDC screenDC = GetDC(nullptr);
+        if (!screenDC) return;
+        
+        // 创建与屏幕兼容的位图
+        backgroundBitmap_ = CreateCompatibleBitmap(screenDC, width, height);
+        if (!backgroundBitmap_) {
+            ReleaseDC(nullptr, screenDC);
+            return;
+        }
+        
+        // 创建内存 DC 来操作位图
+        HDC memDC = CreateCompatibleDC(screenDC);
+        if (!memDC) {
+            DeleteObject(backgroundBitmap_);
+            backgroundBitmap_ = nullptr;
+            ReleaseDC(nullptr, screenDC);
+            return;
+        }
+        
+        HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, backgroundBitmap_);
+        
+        // 设置位图信息 - 注意：SetDIBits 期望的是 BGR 顺序，而我们的输入是 RGB
+        BITMAPINFO bmi{};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height; // 负数表示从上到下
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 24;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        
+        // 检查输入数据格式并转换为 BGR（Windows DIB 格式）
+        if (stride == width * 3) {
+            // 数据是连续的 RGB，需要转换为 BGR
+            std::vector<uint8_t> bgrData(width * height * 3);
+            for (int y = 0; y < height; ++y) {
+                const uint8_t* srcRow = imageData + y * stride;
+                uint8_t* dstRow = bgrData.data() + y * width * 3;
+                
+                for (int x = 0; x < width; ++x) {
+                    dstRow[x * 3 + 0] = srcRow[x * 3 + 2]; // B <- R
+                    dstRow[x * 3 + 1] = srcRow[x * 3 + 1]; // G <- G  
+                    dstRow[x * 3 + 2] = srcRow[x * 3 + 0]; // R <- B
                 }
             }
+            SetDIBits(screenDC, backgroundBitmap_, 0, height, bgrData.data(), &bmi, DIB_RGB_COLORS);
+        } else {
+            // 数据不连续，需要逐行复制并转换为 BGR
+            std::vector<uint8_t> bgrData(width * height * 3);
+            for (int y = 0; y < height; ++y) {
+                const uint8_t* srcRow = imageData + y * stride;
+                uint8_t* dstRow = bgrData.data() + y * width * 3;
+                
+                for (int x = 0; x < width; ++x) {
+                    dstRow[x * 3 + 0] = srcRow[x * 3 + 2]; // B <- R
+                    dstRow[x * 3 + 1] = srcRow[x * 3 + 1]; // G <- G
+                    dstRow[x * 3 + 2] = srcRow[x * 3 + 0]; // R <- B
+                }
+            }
+            SetDIBits(screenDC, backgroundBitmap_, 0, height, bgrData.data(), &bmi, DIB_RGB_COLORS);
         }
         
-        return 60;  // 回退到60Hz
+        SelectObject(memDC, oldBmp);
+        DeleteDC(memDC);
+        ReleaseDC(nullptr, screenDC);
+        
+        backgroundWidth_ = width;
+        backgroundHeight_ = height;
+    }
+
+    void SelectionOverlay::destroyBackgroundBitmap() {
+        if (backgroundBitmap_) {
+            DeleteObject(backgroundBitmap_);
+            backgroundBitmap_ = nullptr;
+        }
+        backgroundWidth_ = 0;
+        backgroundHeight_ = 0;
     }
     
-    double SelectionOverlay::getAnimationProgress() {
-        if (performanceFreq_.QuadPart == 0) return 1.0;  // 如果未初始化，返回完成状态
-        
-        LARGE_INTEGER currentTime;
-        QueryPerformanceCounter(&currentTime);
-        
-        // 计算经过的时间（秒）
-        double elapsedSeconds = static_cast<double>(currentTime.QuadPart - animationStartTime_.QuadPart) 
-                               / static_cast<double>(performanceFreq_.QuadPart);
-        
-        // 计算线性进度（0.0 到 1.0）
-        double linearProgress = elapsedSeconds / FADE_DURATION;
-        linearProgress = std::min(1.0, std::max(0.0, linearProgress));
-        
-        // 应用平滑的缓动函数（ease-in-out）使动画更自然
-        double smoothProgress;
-        if (linearProgress < 0.5) {
-            // 前半段：ease-in（加速）
-            smoothProgress = 2.0 * linearProgress * linearProgress;
-        } else {
-            // 后半段：ease-out（减速）
-            smoothProgress = 1.0 - 2.0 * (1.0 - linearProgress) * (1.0 - linearProgress);
+    LRESULT CALLBACK SelectionOverlay::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) { 
+        SelectionOverlay* self = (SelectionOverlay*)GetWindowLongPtr(h, GWLP_USERDATA); 
+        if (m == WM_NCCREATE) { 
+            CREATESTRUCT* cs = (CREATESTRUCT*)l; 
+            SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams); 
+            return DefWindowProc(h, m, w, l); 
         }
-        
-        return smoothProgress;
+        if (!self) return DefWindowProc(h, m, w, l); 
+        return self->instanceProc(h, m, w, l); 
     }
 
 } // namespace screenshot_tool
