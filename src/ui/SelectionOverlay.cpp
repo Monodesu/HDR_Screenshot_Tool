@@ -142,6 +142,12 @@ namespace screenshot_tool {
         fadingIn_ = fadingOut_ = fadingToFullOpaque_ = false;
         alpha_ = 0;  // 重置透明度
         
+        // 清理旧的双缓冲区，将在第一次绘制时重新创建
+        destroyBackBuffer();
+        
+        // *** 关键修复：清理旧的背景图像，避免显示上一次的冻结帧 ***
+        destroyBackgroundBitmap();
+        
         // 存储虚拟桌面偏移信息
         virtualDesktopLeft_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
         virtualDesktopTop_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -156,9 +162,6 @@ namespace screenshot_tool {
                     displayRect.right - displayRect.left, 
                     displayRect.bottom - displayRect.top, 
                     SWP_SHOWWINDOW);
-        
-        // 清理旧的双缓冲区，将在第一次绘制时重新创建
-        destroyBackBuffer();
         
         // 创建字体资源
         createFont();
@@ -560,21 +563,17 @@ namespace screenshot_tool {
             backgroundCheckTimerId_ = 0;
         }
         
-        // 背景图像设置成功后，立即设置为目标透明度，不使用动画
-        // 这样可以避免动画系统可能的问题
+        // 背景图像设置成功后，让动画自然继续，不要中断
         if (hwnd_) {
-            // 停止所有动画
-            if (timerId_) {
-                KillTimer(hwnd_, timerId_);
-                timerId_ = 0;
+            // 不要停止正在进行的淡入动画，让它自然完成
+            // 如果没有动画在进行，则设置为目标透明度
+            if (!fadingIn_ && !fadingOut_ && !fadingToFullOpaque_) {
+                alpha_ = TARGET_ALPHA;
+                SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
             }
-            fadingIn_ = fadingOut_ = fadingToFullOpaque_ = false;
-            alpha_ = TARGET_ALPHA;  // 直接设置为目标透明度
+            // 如果正在淡入，让动画继续，背景图像会在下次重绘时自动显示
             
-            // 直接设置窗口透明度，显示暗化的背景
-            SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, alpha_, LWA_COLORKEY | LWA_ALPHA);
-            
-            Logger::Debug(L"Background image loaded, overlay set directly to target alpha={}", alpha_);
+            Logger::Debug(L"Background image loaded, current alpha={}, fadingIn={}", alpha_, fadingIn_);
         }
         
         // 如果窗口已经显示，立即重绘显示背景图像
@@ -986,6 +985,40 @@ namespace screenshot_tool {
                 FillRect(dc, &c, darkBrush);
                 SelectObject(dc, oldBrush);
                 DeleteObject(darkBrush);
+                
+                // 只在选择时绘制选择框
+                if (selecting_) {
+                    RECT selectionRect = {
+                        std::min(start_.x, cur_.x),
+                        std::min(start_.y, cur_.y),
+                        std::max(start_.x, cur_.x),
+                        std::max(start_.y, cur_.y)
+                    };
+                    
+                    // 用透明键颜色填充选择区域
+                    HBRUSH clearBrush = CreateSolidBrush(OverlayColors::TRANSPARENT_KEY);
+                    HBRUSH oldBrush2 = (HBRUSH)SelectObject(dc, clearBrush);
+                    FillRect(dc, &selectionRect, clearBrush);
+                    SelectObject(dc, oldBrush2);
+                    DeleteObject(clearBrush);
+                    
+                    // 绘制选择框边框
+                    HPEN pen = CreatePen(PS_SOLID, 2, OverlayColors::SELECTION_BORDER);
+                    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+                    SetBkMode(dc, TRANSPARENT);
+                    
+                    MoveToEx(dc, selectionRect.left, selectionRect.top, nullptr);
+                    LineTo(dc, selectionRect.right, selectionRect.top);
+                    LineTo(dc, selectionRect.right, selectionRect.bottom);
+                    LineTo(dc, selectionRect.left, selectionRect.bottom);
+                    LineTo(dc, selectionRect.left, selectionRect.top);
+                    
+                    SelectObject(dc, oldPen);
+                    DeleteObject(pen);
+                    
+                    // 显示尺寸信息
+                    drawSizeText(dc, selectionRect);
+                }
             }
             
             EndPaint(h, &ps); 

@@ -56,8 +56,8 @@ namespace screenshot_tool {
         UINT_PTR timerId_ = 0;
         static constexpr UINT_PTR FADE_TIMER_ID = 1;
         static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度
-        static constexpr BYTE FADE_STEP = 32;      // 更大的步长，减少动画帧数，提升性能
-        static constexpr UINT FADE_INTERVAL = 20; // 50FPS，在流畅性和性能间找平衡
+        static constexpr BYTE FADE_STEP = 40;      // 精准控制：5帧完成(0→40→80→120→160→200)
+        static constexpr UINT FADE_INTERVAL = 16; // 60FPS，确保流畅性
         
         // 背景检测定时器
         UINT_PTR backgroundCheckTimerId_ = 0;
