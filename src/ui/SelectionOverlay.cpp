@@ -303,6 +303,14 @@ namespace screenshot_tool {
         // 重新创建画刷
         d2dRenderTarget_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &d2dWhiteBrush_);
         d2dRenderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.16f, 0.16f, 0.16f, 0.8f), &d2dDarkBrush_);
+        
+        // *** 清理调整大小后的缓冲区，避免显示旧内容 ***
+        if (d2dRenderTarget_) {
+            d2dRenderTarget_->BeginDraw();
+            d2dRenderTarget_->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+            d2dRenderTarget_->EndDraw();
+            dxgiSwapChain_->Present(0, 0);
+        }
     }
 
     void SelectionOverlay::initializeSimpleAnimation() {
@@ -384,6 +392,16 @@ namespace screenshot_tool {
         
         // 调整D3D渲染器大小
         resizeD3DRenderer(displayRect.right - displayRect.left, displayRect.bottom - displayRect.top);
+        
+        // *** 清理D3D交换链缓冲区，避免显示上次的内容 ***
+        if (d2dRenderTarget_) {
+            d2dRenderTarget_->BeginDraw();
+            d2dRenderTarget_->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+            d2dRenderTarget_->EndDraw();
+            if (dxgiSwapChain_) {
+                dxgiSwapChain_->Present(0, 0);
+            }
+        }
         
         // 设置窗口完全透明，等待背景图像加载
         SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 0, LWA_COLORKEY | LWA_ALPHA);
@@ -972,10 +990,16 @@ namespace screenshot_tool {
             if (imageData && width > 0 && height > 0) {
                 createBackgroundBitmap(imageData, width, height, stride);
                 
-                // 背景图像加载完成后，如果当前alpha为0且没有在进行动画，启动淡入
-                if (!fadingIn_ && !fadingOut_ && alpha_ == 0 && !IsWindowVisible(hwnd_)) {
+                // 背景图像加载完成后，立即显示窗口并启动淡入动画
+                if (backgroundBitmap_ && !IsWindowVisible(hwnd_)) {
                     auto style = GetWindowLong(hwnd_, GWL_EXSTYLE);
                     SetWindowLong(hwnd_, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+                    
+                    // 设置初始透明度并显示窗口
+                    SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 0, LWA_COLORKEY | LWA_ALPHA);
+                    ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+                    
+                    // 启动淡入动画
                     startFadeIn();
                 }
                 
