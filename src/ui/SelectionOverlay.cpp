@@ -165,10 +165,6 @@ namespace screenshot_tool {
         virtualDesktopLeft_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
         virtualDesktopTop_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
         
-        Logger::Debug(L"Virtual desktop origin: ({}, {})", virtualDesktopLeft_, virtualDesktopTop_);
-        Logger::Debug(L"Display rect: ({}, {}) to ({}, {})", 
-                     displayRect.left, displayRect.top, displayRect.right, displayRect.bottom);
-        
         // 创建字体资源
         createFont();
         
@@ -182,23 +178,16 @@ namespace screenshot_tool {
         // 设置窗口完全透明，等待背景图像加载
         SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
         
-        // *** 关键修复3：不立即显示窗口，等待背景图像加载完成后再显示 ***
-        
         // 设置键盘焦点以接收ESC键
         SetFocus(hwnd_);
-        
-        Logger::Debug(L"Window prepared with initial alpha={}, waiting for background", alpha_);
     }
 
     // ---- 淡入淡出动画实现 ----
     void SelectionOverlay::startFadeIn() {
-        Logger::Debug(L"startFadeIn called, backgroundBitmap_={}", backgroundBitmap_ ? L"valid" : L"null");
-        
         // 停止之前的动画和定时器
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
             timerId_ = 0;
-            Logger::Debug(L"Previous timer killed in startFadeIn");
         }
         
         // 强制重置所有动画状态
@@ -216,10 +205,9 @@ namespace screenshot_tool {
         // 窗口始终完全不透明，通过内容渲染控制视觉效果
         SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
         
-        // 启动高帧率动画定时器
+        // 启动超高帧率动画定时器
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, fadeInterval_, nullptr);
         if (!timerId_) {
-            Logger::Error(L"Failed to create fade timer in startFadeIn");
             // 如果定时器创建失败，直接显示最终效果
             alpha_ = TARGET_ALPHA;
             fadingIn_ = false;
@@ -229,15 +217,9 @@ namespace screenshot_tool {
         
         // 立即触发重绘显示初始状态
         InvalidateRect(hwnd_, nullptr, FALSE);
-        
-        Logger::Debug(L"High-FPS fade-in animation started: {}Hz, interval={}ms", 
-                     displayRefreshRate_, fadeInterval_);
     }
 
     void SelectionOverlay::startFadeToFullOpaque() {
-        // 这个方法在简化的动画系统中不再使用
-        Logger::Debug(L"startFadeToFullOpaque called but not used in simplified mode");
-        
         // 确保窗口完全不透明
         alpha_ = TARGET_ALPHA;
         SetLayeredWindowAttributes(hwnd_, OverlayColors::TRANSPARENT_KEY, 255, LWA_COLORKEY);
@@ -247,8 +229,6 @@ namespace screenshot_tool {
     }
 
     void SelectionOverlay::startFadeOut() {
-        Logger::Debug(L"startFadeOut called");
-        
         // 停止之前的动画
         if (timerId_) {
             KillTimer(hwnd_, timerId_);
@@ -265,31 +245,24 @@ namespace screenshot_tool {
             alpha_ = 0;
             fadingOut_ = false;
             ShowWindow(hwnd_, SW_HIDE);
-            Logger::Debug(L"Window hidden immediately (alpha was 0)");
             return;
         }
         
         // 记录动画开始时间
         QueryPerformanceCounter(&animationStartTime_);
         
-        // 启动高帧率淡出动画定时器
+        // 启动超高帧率淡出动画定时器
         timerId_ = SetTimer(hwnd_, FADE_TIMER_ID, fadeInterval_, nullptr);
         if (!timerId_) {
-            Logger::Error(L"Failed to create fade timer in startFadeOut");
             // 如果定时器创建失败，直接隐藏
             alpha_ = 0;
             fadingOut_ = false;
             ShowWindow(hwnd_, SW_HIDE);
             return;
         }
-        
-        Logger::Debug(L"High-FPS fade-out animation started: {}Hz, from alpha={}", 
-                     displayRefreshRate_, alpha_);
     }
 
     void SelectionOverlay::updateFade() {
-        bool animationCompleted = false;
-        
         // 获取当前动画进度（0.0 到 1.0）
         double progress = getAnimationProgress();
         
@@ -300,8 +273,10 @@ namespace screenshot_tool {
             if (progress >= 1.0) {
                 alpha_ = TARGET_ALPHA;
                 fadingIn_ = false;
-                animationCompleted = true;
-                Logger::Debug(L"Fade-in completed at alpha={}", alpha_);
+                if (timerId_) {
+                    KillTimer(hwnd_, timerId_);
+                    timerId_ = 0;
+                }
             }
         } else if (fadingToFullOpaque_) {
             // 淡入到完全不透明：从当前值到255的平滑过渡
@@ -311,8 +286,10 @@ namespace screenshot_tool {
             if (progress >= 1.0) {
                 alpha_ = 255;
                 fadingToFullOpaque_ = false;
-                animationCompleted = true;
-                Logger::Debug(L"Fade-to-full-opaque completed at alpha={}", alpha_);
+                if (timerId_) {
+                    KillTimer(hwnd_, timerId_);
+                    timerId_ = 0;
+                }
             }
         } else if (fadingOut_) {
             // 淡出：从当前alpha到0的平滑过渡
@@ -322,12 +299,16 @@ namespace screenshot_tool {
             if (progress >= 1.0) {
                 alpha_ = 0;
                 fadingOut_ = false;
-                animationCompleted = true;
-                Logger::Debug(L"Fade-out completed at alpha={}", alpha_);
+                if (timerId_) {
+                    KillTimer(hwnd_, timerId_);
+                    timerId_ = 0;
+                }
+                // 淡出完成时隐藏窗口
+                ShowWindow(hwnd_, SW_HIDE);
+                return; // 直接返回，不再重绘
             }
         } else {
             // 错误状态：没有任何动画正在进行，但定时器仍在运行
-            Logger::Warn(L"updateFade called but no animation is active! Stopping timer.");
             if (timerId_) {
                 KillTimer(hwnd_, timerId_);
                 timerId_ = 0;
@@ -335,37 +316,11 @@ namespace screenshot_tool {
             return; // 直接返回，不更新窗口
         }
         
-        // 触发重绘以更新视觉效果
+        // 使用更精确的重绘：仅标记需要重绘，让系统优化
         InvalidateRect(hwnd_, nullptr, FALSE);
-        
-        // 如果动画完成，停止定时器并执行完成逻辑
-        if (animationCompleted) {
-            if (timerId_) {
-                KillTimer(hwnd_, timerId_);
-                timerId_ = 0;
-            }
-            
-            // 淡出完成时隐藏窗口
-            if (alpha_ == 0) {
-                ShowWindow(hwnd_, SW_HIDE);
-                Logger::Debug(L"Window hidden after fade out complete");
-            }
-        }
-        
-        // 性能日志：只在debug模式下记录详细进度
-        #ifdef _DEBUG
-        static int logCounter = 0;
-        if (++logCounter % 10 == 0) {  // 每10帧记录一次，避免日志过多
-            Logger::Debug(L"Animation progress: {:.1f}%, alpha={}, {}Hz", 
-                         progress * 100.0, alpha_, displayRefreshRate_);
-        }
-        #endif
     }
 
     void SelectionOverlay::onFadeComplete() {
-        // 这个方法在简化的动画系统中不再使用
-        Logger::Debug(L"onFadeComplete called but not used in simplified mode");
-        
         // 确保所有动画状态都被重置
         fadingIn_ = false;
         fadingOut_ = false;
@@ -594,12 +549,10 @@ namespace screenshot_tool {
     // ---- 背景图像相关方法实现 ----
     void SelectionOverlay::SetBackgroundImage(const uint8_t* imageData, int width, int height, int stride) {
         if (!imageData || width <= 0 || height <= 0) {
-            Logger::Debug(L"SetBackgroundImage: clearing background (null data or invalid size)");
             destroyBackgroundBitmap();
             return;
         }
         
-        Logger::Debug(L"SetBackgroundImage: setting background {}x{}, stride={}", width, height, stride);
         createBackgroundBitmap(imageData, width, height, stride);
         
         // 停止背景检测定时器，因为背景已经设置成功
@@ -610,8 +563,6 @@ namespace screenshot_tool {
         
         // 背景图像设置成功，现在显示窗口并启动淡入动画
         if (hwnd_) {
-            Logger::Debug(L"Background image loaded, showing window and starting fade-in animation");
-            
             // 先显示窗口
             ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
             
@@ -630,7 +581,6 @@ namespace screenshot_tool {
         // 启动背景检测定时器
         if (hwnd_) {
             backgroundCheckTimerId_ = SetTimer(hwnd_, BACKGROUND_CHECK_TIMER_ID, BACKGROUND_CHECK_INTERVAL, nullptr);
-            Logger::Debug(L"Started background check timer");
         }
     }
 
@@ -679,12 +629,7 @@ namespace screenshot_tool {
                 }
                 
                 // 将转换后的图像数据写入位图
-                int result = SetDIBits(memDC, backgroundBitmap_, 0, height, bgrData.data(), &bmi, DIB_RGB_COLORS);
-                if (result == 0) {
-                    Logger::Warn(L"SetDIBits failed for background bitmap");
-                } else {
-                    Logger::Debug(L"Successfully created background bitmap: {}x{}", width, height);
-                }
+                SetDIBits(memDC, backgroundBitmap_, 0, height, bgrData.data(), &bmi, DIB_RGB_COLORS);
                 
                 backgroundWidth_ = width;
                 backgroundHeight_ = height;
@@ -694,10 +639,7 @@ namespace screenshot_tool {
             } else {
                 DeleteObject(backgroundBitmap_);
                 backgroundBitmap_ = nullptr;
-                Logger::Error(L"Failed to create compatible DC for background bitmap");
             }
-        } else {
-            Logger::Error(L"Failed to create compatible bitmap");
         }
         
         ReleaseDC(hwnd_, hdc);
@@ -1086,14 +1028,15 @@ namespace screenshot_tool {
         // 获取显示器刷新率
         displayRefreshRate_ = getDisplayRefreshRate();
         
-        // 计算最优定时器间隔（匹配显示器刷新率）
-        fadeInterval_ = 1000 / displayRefreshRate_;  // 毫秒
+        // 使用固定的超高频率定时器，确保极致流畅
+        fadeInterval_ = 5;  // 5ms = 200Hz，远超人眼感知
         
-        // 确保间隔不低于1ms（避免过高的CPU占用）
-        fadeInterval_ = std::max(1U, fadeInterval_);
-        
-        Logger::Debug(L"Animation system initialized: refresh={}Hz, interval={}ms", 
-                     displayRefreshRate_, fadeInterval_);
+        // 只在首次初始化时输出一次日志
+        static bool logged = false;
+        if (!logged) {
+            Logger::Debug(L"Animation system: {}Hz display, 200fps updates", displayRefreshRate_);
+            logged = true;
+        }
     }
     
     UINT SelectionOverlay::getDisplayRefreshRate() {
@@ -1113,13 +1056,11 @@ namespace screenshot_tool {
             
             if (EnumDisplaySettings(monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode)) {
                 if (devMode.dmDisplayFrequency > 0 && devMode.dmDisplayFrequency <= 500) {
-                    Logger::Debug(L"Detected display refresh rate: {}Hz", devMode.dmDisplayFrequency);
                     return devMode.dmDisplayFrequency;
                 }
             }
         }
         
-        Logger::Debug(L"Failed to detect refresh rate, using default 60Hz");
         return 60;  // 回退到60Hz
     }
     
@@ -1133,11 +1074,21 @@ namespace screenshot_tool {
         double elapsedSeconds = static_cast<double>(currentTime.QuadPart - animationStartTime_.QuadPart) 
                                / static_cast<double>(performanceFreq_.QuadPart);
         
-        // 计算进度（0.0 到 1.0）
-        double progress = elapsedSeconds / FADE_DURATION;
+        // 计算线性进度（0.0 到 1.0）
+        double linearProgress = elapsedSeconds / FADE_DURATION;
+        linearProgress = std::min(1.0, std::max(0.0, linearProgress));
         
-        // 确保进度在有效范围内
-        return std::min(1.0, std::max(0.0, progress));
+        // 应用平滑的缓动函数（ease-in-out）使动画更自然
+        double smoothProgress;
+        if (linearProgress < 0.5) {
+            // 前半段：ease-in（加速）
+            smoothProgress = 2.0 * linearProgress * linearProgress;
+        } else {
+            // 后半段：ease-out（减速）
+            smoothProgress = 1.0 - 2.0 * (1.0 - linearProgress) * (1.0 - linearProgress);
+        }
+        
+        return smoothProgress;
     }
 
 } // namespace screenshot_tool

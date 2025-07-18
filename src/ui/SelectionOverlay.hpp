@@ -65,9 +65,9 @@ namespace screenshot_tool {
         // 基于时间的动画系统
         LARGE_INTEGER animationStartTime_{};  // 动画开始时间（高精度）
         LARGE_INTEGER performanceFreq_{};     // 性能计数器频率
-        static constexpr double FADE_DURATION = 0.2;  // 动画持续时间：200ms
+        static constexpr double FADE_DURATION = 0.35;  // 动画持续时间：350ms（平衡流畅和速度）
         UINT displayRefreshRate_ = 60;        // 显示器刷新率，默认60Hz
-        UINT fadeInterval_ = 16;              // 动态计算的定时器间隔
+        UINT fadeInterval_ = 5;               // 超高频率定时器间隔（5ms约200Hz）
         
         // 背景检测定时器
         UINT_PTR backgroundCheckTimerId_ = 0;
