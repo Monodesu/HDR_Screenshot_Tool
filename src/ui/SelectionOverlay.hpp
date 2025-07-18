@@ -35,6 +35,11 @@ namespace screenshot_tool {
         void updateFade();
         void onFadeComplete();
         
+        // 动画系统辅助方法
+        void initializeAnimationSystem();  // 初始化动画系统
+        UINT getDisplayRefreshRate();       // 获取显示器刷新率
+        double getAnimationProgress();      // 获取当前动画进度(0.0-1.0)
+        
         // 双缓冲绘制相关
         void createBackBuffer(int width, int height);
         void destroyBackBuffer();
@@ -52,12 +57,17 @@ namespace screenshot_tool {
         BYTE alpha_ = 0; 
         bool fadingIn_ = false; 
         bool fadingOut_ = false;
-        bool fadingToFullOpaque_ = false;  // 新增：淡入到完全不透明的状态
+        bool fadingToFullOpaque_ = false;
         UINT_PTR timerId_ = 0;
         static constexpr UINT_PTR FADE_TIMER_ID = 1;
-        static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度，保留一些透明感
-        static constexpr BYTE FADE_STEP = 25;      // 适中的步长：8帧完成(0→25→50→75→100→125→150→175→200)
-        static constexpr UINT FADE_INTERVAL = 20; // 50FPS，平滑但不过于频繁
+        static constexpr BYTE TARGET_ALPHA = 200;  // 目标透明度，保持视觉效果
+        
+        // 基于时间的动画系统
+        LARGE_INTEGER animationStartTime_{};  // 动画开始时间（高精度）
+        LARGE_INTEGER performanceFreq_{};     // 性能计数器频率
+        static constexpr double FADE_DURATION = 0.2;  // 动画持续时间：200ms
+        UINT displayRefreshRate_ = 60;        // 显示器刷新率，默认60Hz
+        UINT fadeInterval_ = 16;              // 动态计算的定时器间隔
         
         // 背景检测定时器
         UINT_PTR backgroundCheckTimerId_ = 0;
